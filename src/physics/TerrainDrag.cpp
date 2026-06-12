@@ -66,6 +66,7 @@ TerrainDrag::TerrainDrag(CFDSim& sim)
     pp.query("horizontal_slope_end", m_horizontal_slope_end);
     pp.query("vertical_slope", m_vertical_slope);
     pp.query("vertical_full", m_vertical_full);
+    pp.query("terrain_aware_damping", m_terrain_aware_damping);
 }
 
 void TerrainDrag::initialize_fields(int level, const amrex::Geometry& geom)
@@ -197,6 +198,8 @@ void TerrainDrag::initialize_fields(int level, const amrex::Geometry& geom)
     const amrex::Real damping_south_start =
         prob_lo[1] + (m_damp_south_full + m_damp_south_slope);
     const amrex::Real damping_south_end = prob_lo[1] + m_damp_south_full;
+    // Terrain Aware Damping
+    bool terrain_aware_damping = m_terrain_aware_damping;
     amrex::ParallelFor(
         damping, [=] AMREX_GPU_DEVICE(int nbx, int i, int j, int k) noexcept {
             amrex::Real horizontal_coeff_east = 0.0_rt;
@@ -206,7 +209,10 @@ void TerrainDrag::initialize_fields(int level, const amrex::Geometry& geom)
             amrex::Real vertical_coeff = 0.0_rt;
             const amrex::Real x = prob_lo[0] + (i + 0.5_rt) * dx[0];
             const amrex::Real y = prob_lo[1] + (j + 0.5_rt) * dx[1];
-            const amrex::Real z = prob_lo[2] + (k + 0.5_rt) * dx[2];
+	    const amrex::Real cell_terrain_height = levelheight[nbx](i,j,k);
+            const amrex::Real z = (terrain_aware_damping)? amrex::max<amrex::Real>(
+                prob_lo[2] + ((k + 0.5_rt) * dx[2]) - cell_terrain_height,
+                0.5_rt * dx[2]):prob_lo[2] + (k + 0.5_rt) * dx[2];
             if (x < damping_east_start) {
                 horizontal_coeff_east = 0.0_rt;
             } else if (x >= damping_east_end) {
