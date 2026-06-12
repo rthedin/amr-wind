@@ -165,7 +165,8 @@ void Kosovic<Transport>::update_turbulent_viscosity(
                         : (k + 1) * dz;
                 const amrex::Real ransL =
                     utils::powi(0.41_rt * wall_distance / phiM, 2);
-                const amrex::Real turnOff = std::exp(-x3 / locLESTurnOff);
+                //const amrex::Real turnOff = std::exp(-x3 / locLESTurnOff);
+		const amrex::Real turnOff = (x3<locLESTurnOff)?1:std::exp(- 10 * x3 / locLESTurnOff);
                 const amrex::Real viscosityScale =
                     (locSurfaceFactor *
                      (std::pow(1.0_rt - fmu, locSurfaceRANSExp) * smag_factor +
