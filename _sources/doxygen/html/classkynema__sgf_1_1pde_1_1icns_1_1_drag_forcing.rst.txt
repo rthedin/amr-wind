@@ -1,0 +1,14 @@
+.. meta::c9a9ee77b33654139580dd6d4ba2070445770afd06d6465d6300efe3658993cf27061ba9c59951a153c68d183655cfb38039eedc2f56e67a1843a9e11fe1fefa
+
+:orphan:
+
+.. title:: Kynema-SGF API: kynema_sgf::pde::icns::DragForcing Class Reference
+
+DragForcing Class Reference
+===========================
+
+.. container:: doxygen-content
+
+   
+   .. raw:: html
+     :file: classkynema__sgf_1_1pde_1_1icns_1_1_drag_forcing.html

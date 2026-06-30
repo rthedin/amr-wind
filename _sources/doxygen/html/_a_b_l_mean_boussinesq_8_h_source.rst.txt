@@ -1,0 +1,14 @@
+.. meta::302216c826b828adbdbbfe2e662bf8b610034b6148baac62fe6dee36beba8a0ebbe2d45eaf4217772f1a5397b7bfa578c5c8b05793408a825009236899f57a39
+
+:orphan:
+
+.. title:: Kynema-SGF API: /home/runner/work/amr-wind/amr-wind/src/equation_systems/icns/source_terms/ABLMeanBoussinesq.H Source File
+
+/home/runner/work/amr-wind/amr-wind/src/equation\_systems/icns/source\_terms/ABLMeanBoussinesq.H Source File
+============================================================================================================
+
+.. container:: doxygen-content
+
+   
+   .. raw:: html
+     :file: _a_b_l_mean_boussinesq_8_h_source.html

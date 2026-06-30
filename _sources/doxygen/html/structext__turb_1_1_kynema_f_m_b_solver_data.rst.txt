@@ -1,0 +1,14 @@
+.. meta::a0a7f4e0452ceb7db03684e7f0b12878da88fdcca9238016144a4c6f22a12d8572d0743e4518b96a416d60de6b6585fe588a6d8856a2a0caa2c5af6f59645b6d
+
+:orphan:
+
+.. title:: Kynema-SGF API: ext_turb::KynemaFMBSolverData Struct Reference
+
+KynemaFMBSolverData Struct Reference
+====================================
+
+.. container:: doxygen-content
+
+   
+   .. raw:: html
+     :file: structext__turb_1_1_kynema_f_m_b_solver_data.html

@@ -1,0 +1,14 @@
+.. meta::3b91409557a822c1f49fdbc07470dbce11a81dca052c846986ead14e8979c4da6cbf8aeb58fdd313e0b752425155871876a64157218051e1c55eaea7d8cf0130
+
+:orphan:
+
+.. title:: Kynema-SGF API: ext_turb::ExtTurbIface&lt; SolverTurbine, SolverData &gt; Class Template Reference
+
+ExtTurbIface&lt; SolverTurbine, SolverData &gt; Class Template Reference
+========================================================================
+
+.. container:: doxygen-content
+
+   
+   .. raw:: html
+     :file: classext__turb_1_1_ext_turb_iface.html
