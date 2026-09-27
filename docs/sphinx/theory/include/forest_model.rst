@@ -87,3 +87,21 @@ The point-cloud model is useful when remote-sensing products or preprocessed can
 individual forest patches. Compared with the simplified uniform or analytical vertical-profile models, this approach allows the drag field
 to vary in all three spatial directions while still using a compact set of scattered sample points.
 
+Roughness representation
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+When the canopy is not resolved by the mesh, ``ForestDrag.model = roughness``
+replaces the canopy drag by a roughness length in the footprint of each forest.
+The terrain wall model then applies the log law in the first cell above the
+ground,
+
+.. math::
+
+   u_* = \frac{\kappa \, U_1}{\ln \left( z_1 / z_0 \right) - \psi_m},
+
+with the forest :math:`z_0` given directly or as a fraction of the tree
+height, :math:`z_0 = c \, h`. A typical value is :math:`c \approx 0.1`. The
+flow sees the forest as a rough surface at the ground: no displacement height
+:math:`d` is applied, so the mean profile above a tall canopy is the log law
+:math:`\ln(z/z_0)` rather than :math:`\ln((z-d)/z_0)`.
+

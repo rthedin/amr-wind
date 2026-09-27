@@ -492,4 +492,202 @@ TEST_F(ForestTest, type2_forest_top_on_cell_center_terrain)
     EXPECT_NEAR(utils::field_probe(f_drag, 0, 16, 16, 5), 0.0_rt, tol);
 }
 
+// Roughness mode: no canopy drag, each footprint writes its z0 into the
+// TerrainDrag roughness in whole columns and leaves it elsewhere.
+TEST_F(ForestTest, roughness_mode_writes_z0_in_footprint)
+{
+    write_forest(m_forest_fname);
+    write_linear_terrain(
+        m_terrain_fname, 0.0_rt, 1024.0_rt, 0.0_rt, 1024.0_rt, 128.0_rt,
+        128.0_rt);
+    populate_parameters();
+    {
+        amrex::ParmParse pp("TerrainDrag");
+        pp.add("terrain_file", m_terrain_fname);
+    }
+    {
+        amrex::ParmParse pp("ForestDrag");
+        pp.add("model", std::string("roughness"));
+        amrex::Vector<amrex::Real> z0{0.5_rt, 1.0_rt, 1.5_rt, 2.0_rt};
+        pp.addarr("roughness_z0", z0);
+    }
+    initialize_mesh();
+    sim().pde_manager().register_icns();
+    auto& terrain_drag = sim().physics_manager().create("TerrainDrag", sim());
+    auto& forest_drag = sim().physics_manager().create("ForestDrag", sim());
+    const auto& geom = sim().repo().mesh().Geom(0);
+    terrain_drag.initialize_fields(0, geom);
+    forest_drag.initialize_fields(0, geom);
+
+    const amrex::Real tol = kynema_sgf::constants::TIGHT_TOL;
+    const auto& z0 = sim().repo().get_field("terrainz0");
+    const auto& f_drag = sim().repo().get_field("forest_drag");
+    const auto& f_id = sim().repo().get_field("forest_id");
+
+    // No canopy drag anywhere
+    EXPECT_EQ(kynema_sgf::field_ops::global_max_magnitude(f_drag), 0.0_rt);
+
+    // Forest 0 around (512, 256): the whole column, including the first
+    // cell above the ground (k = 4) used by the wall model
+    for (int k = 0; k < 16; ++k) {
+        EXPECT_NEAR(utils::field_probe(z0, 0, 16, 8, k), 0.5_rt, tol);
+    }
+    // Forest 3 around (512, 762): x = 528, y = 784
+    EXPECT_NEAR(utils::field_probe(z0, 0, 16, 24, 4), 2.0_rt, tol);
+    // Forests 1 and 2 overlap at (528, 560): the later one wins
+    EXPECT_NEAR(utils::field_probe(z0, 0, 16, 17, 4), 1.5_rt, tol);
+
+    // Outside the footprints the TerrainDrag default is kept
+    EXPECT_NEAR(utils::field_probe(z0, 0, 0, 0, 4), 0.1_rt, tol);
+    EXPECT_NEAR(utils::field_probe(z0, 0, 16, 2, 4), 0.1_rt, tol);
+    EXPECT_NEAR(utils::field_probe(z0, 0, 31, 8, 4), 0.1_rt, tol);
+    // (400, 144) is in the bounding box of forest 0 but outside its circle
+    EXPECT_NEAR(utils::field_probe(z0, 0, 12, 4, 4), 0.1_rt, tol);
+
+    // forest_id marks the trees above the ground (45 m tall forest 0)
+    EXPECT_NEAR(utils::field_probe(f_id, 0, 16, 8, 3), -1.0_rt, tol);
+    EXPECT_NEAR(utils::field_probe(f_id, 0, 16, 8, 4), 0.0_rt, tol);
+    EXPECT_NEAR(utils::field_probe(f_id, 0, 16, 8, 5), -1.0_rt, tol);
+    EXPECT_NEAR(utils::field_probe(f_id, 0, 0, 0, 4), -1.0_rt, tol);
+}
+
+// z0 as a fraction of the tree height, one value for all forests
+TEST_F(ForestTest, roughness_mode_height_fraction)
+{
+    write_forest(m_forest_fname);
+    write_linear_terrain(
+        m_terrain_fname, 0.0_rt, 1024.0_rt, 0.0_rt, 1024.0_rt, 128.0_rt,
+        128.0_rt);
+    populate_parameters();
+    {
+        amrex::ParmParse pp("TerrainDrag");
+        pp.add("terrain_file", m_terrain_fname);
+    }
+    {
+        amrex::ParmParse pp("ForestDrag");
+        pp.add("model", std::string("roughness"));
+        pp.add("roughness_height_fraction", 0.1_rt);
+    }
+    initialize_mesh();
+    sim().pde_manager().register_icns();
+    auto& terrain_drag = sim().physics_manager().create("TerrainDrag", sim());
+    auto& forest_drag = sim().physics_manager().create("ForestDrag", sim());
+    const auto& geom = sim().repo().mesh().Geom(0);
+    terrain_drag.initialize_fields(0, geom);
+    forest_drag.initialize_fields(0, geom);
+
+    const amrex::Real tol = kynema_sgf::constants::TIGHT_TOL;
+    const auto& z0 = sim().repo().get_field("terrainz0");
+    // Forest 0 is 45 m tall, forest 3 is 120 m tall
+    EXPECT_NEAR(utils::field_probe(z0, 0, 16, 8, 4), 4.5_rt, tol);
+    EXPECT_NEAR(utils::field_probe(z0, 0, 16, 24, 4), 12.0_rt, tol);
+    EXPECT_NEAR(utils::field_probe(z0, 0, 0, 0, 4), 0.1_rt, tol);
+}
+
+// Roughness mode writes the TerrainDrag field, so TerrainDrag is required
+TEST_F(ForestTest, roughness_mode_without_terrain_aborts)
+{
+    write_forest(m_forest_fname);
+    populate_parameters();
+    {
+        amrex::ParmParse pp("ForestDrag");
+        pp.add("model", std::string("roughness"));
+        pp.add("roughness_z0", 1.0_rt);
+    }
+    initialize_mesh();
+    sim().pde_manager().register_icns();
+    auto& forest_drag = sim().physics_manager().create("ForestDrag", sim());
+    EXPECT_THROW(
+        forest_drag.initialize_fields(0, sim().repo().mesh().Geom(0)),
+        amrex::RuntimeError);
+}
+
+TEST_F(ForestTest, roughness_mode_needs_one_roughness_input)
+{
+    write_forest(m_forest_fname);
+    populate_parameters();
+    {
+        amrex::ParmParse pp("ForestDrag");
+        pp.add("model", std::string("roughness"));
+        pp.add("roughness_z0", 1.0_rt);
+        pp.add("roughness_height_fraction", 0.1_rt);
+    }
+    initialize_mesh();
+    sim().pde_manager().register_icns();
+    EXPECT_THROW(
+        sim().physics_manager().create("ForestDrag", sim()),
+        amrex::RuntimeError);
+}
+
+// The default canopy model leaves the TerrainDrag roughness untouched
+TEST_F(ForestTest, canopy_mode_keeps_terrain_roughness)
+{
+    write_forest(m_forest_fname);
+    write_linear_terrain(
+        m_terrain_fname, 0.0_rt, 1024.0_rt, 0.0_rt, 1024.0_rt, 128.0_rt,
+        128.0_rt);
+    populate_parameters();
+    {
+        amrex::ParmParse pp("TerrainDrag");
+        pp.add("terrain_file", m_terrain_fname);
+    }
+    initialize_mesh();
+    sim().pde_manager().register_icns();
+    auto& terrain_drag = sim().physics_manager().create("TerrainDrag", sim());
+    auto& forest_drag = sim().physics_manager().create("ForestDrag", sim());
+    const auto& geom = sim().repo().mesh().Geom(0);
+    terrain_drag.initialize_fields(0, geom);
+    forest_drag.initialize_fields(0, geom);
+
+    const auto& z0 = sim().repo().get_field("terrainz0");
+    EXPECT_EQ(kynema_sgf::field_ops::global_max_magnitude(z0), 0.1_rt);
+    EXPECT_EQ(utils::field_min(z0), 0.1_rt);
+    EXPECT_GT(
+        kynema_sgf::field_ops::global_max_magnitude(
+            sim().repo().get_field("forest_drag")),
+        0.0_rt);
+}
+
+// Point-cloud footprint is the x-y convex hull of the samples
+TEST_F(PointCloudForestTest, roughness_mode_point_cloud_hull)
+{
+    write_point_cloud_forest(m_point_cloud_fname);
+    write_linear_terrain(
+        m_terrain_fname, 0.0_rt, 8.0_rt, 0.0_rt, 8.0_rt, 2.0_rt, 2.0_rt);
+    populate_parameters();
+    {
+        amrex::ParmParse pp("TerrainDrag");
+        pp.add("terrain_file", m_terrain_fname);
+    }
+    {
+        amrex::ParmParse pp("ForestDrag");
+        amrex::Vector<std::string> cloud_files{m_point_cloud_fname};
+        amrex::Vector<amrex::Real> cds{2.0_rt};
+        pp.addarr("point_cloud_files", cloud_files);
+        pp.addarr("coefficients_of_drag", cds);
+        pp.add("model", std::string("roughness"));
+        pp.add("roughness_z0", 0.7_rt);
+    }
+    initialize_mesh();
+    sim().pde_manager().register_icns();
+    auto& terrain_drag = sim().physics_manager().create("TerrainDrag", sim());
+    auto& forest_drag = sim().physics_manager().create("ForestDrag", sim());
+    const auto& geom = sim().repo().mesh().Geom(0);
+    terrain_drag.initialize_fields(0, geom);
+    forest_drag.initialize_fields(0, geom);
+
+    const amrex::Real tol = kynema_sgf::constants::TIGHT_TOL;
+    const auto& z0 = sim().repo().get_field("terrainz0");
+    // Hull vertices (2.5, 2.5), (4.5, 2.5), (2.5, 6.5); ground cell k = 2
+    EXPECT_NEAR(utils::field_probe(z0, 0, 2, 2, 2), 0.7_rt, tol);
+    EXPECT_NEAR(utils::field_probe(z0, 0, 3, 3, 2), 0.7_rt, tol);
+    EXPECT_NEAR(utils::field_probe(z0, 0, 5, 2, 2), 0.1_rt, tol);
+    EXPECT_NEAR(utils::field_probe(z0, 0, 0, 0, 2), 0.1_rt, tol);
+    EXPECT_NEAR(utils::field_probe(z0, 0, 2, 7, 2), 0.1_rt, tol);
+    EXPECT_EQ(
+        kynema_sgf::field_ops::global_max_magnitude(
+            sim().repo().get_field("forest_drag")),
+        0.0_rt);
+}
+
 } // namespace kynema_sgf_tests

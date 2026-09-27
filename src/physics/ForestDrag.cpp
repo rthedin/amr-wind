@@ -120,6 +120,50 @@ ForestDrag::ForestDrag(CFDSim& sim)
             amrex::max<int>(1, amrex::min<int>(m_point_neighbors, 8));
     }
 
+    // Canopy drag (default) or a roughness length in each forest footprint.
+    std::string model{"canopy"};
+    pp.query("model", model);
+    if (model == "roughness") {
+        m_roughness_mode = true;
+    } else if (model != "canopy") {
+        amrex::Abort(
+            "ForestDrag: 'model' must be 'canopy' or 'roughness', not '" +
+            model + "'");
+    }
+    if (m_roughness_mode) {
+        const bool has_z0 = pp.contains("roughness_z0");
+        const bool has_fraction = pp.contains("roughness_height_fraction");
+        if (has_z0 == has_fraction) {
+            amrex::Abort(
+                "ForestDrag: model = roughness needs exactly one of "
+                "'roughness_z0' or 'roughness_height_fraction'");
+        }
+        pp.queryarr("roughness_z0", m_roughness_z0);
+        pp.queryarr("roughness_height_fraction", m_roughness_height_fraction);
+        const auto& values =
+            has_z0 ? m_roughness_z0 : m_roughness_height_fraction;
+        if (values.empty()) {
+            amrex::Abort("ForestDrag: empty roughness list");
+        }
+        for (const auto v : values) {
+            if (!(v > 0.0_rt)) {
+                amrex::Abort("ForestDrag: roughness values must be positive");
+            }
+        }
+        if (point_forest && values.size() != 1 &&
+            values.size() != m_point_cloud_files.size()) {
+            amrex::Abort(
+                "ForestDrag: give one roughness value, or one per "
+                "point-cloud file");
+        }
+        bool canopy_tke = false;
+        pp.query("canopy_tke", canopy_tke);
+        if (canopy_tke) {
+            amrex::Print() << "WARNING: ForestDrag: canopy_tke has no effect "
+                              "with model = roughness (forest_drag is zero)\n";
+        }
+    }
+
     // Register outputs and initialize field defaults.
     m_sim.io_manager().register_output_var("forest_drag");
     m_sim.io_manager().register_output_var("forest_id");
@@ -190,6 +234,71 @@ void ForestDrag::initialize_fields(int level, const amrex::Geometry& geom)
     // Rebuild fields from scratch each time we initialize this level.
     drag.setVal(0.0_rt);
     fst_id.setVal(-1.0_rt);
+
+    if (m_roughness_mode) {
+        // TerrainDrag fills terrainz0 (roughness file or its default) first;
+        // the footprints overwrite it, the last forest in the input wins.
+        // forest_drag stays zero and forest_id marks the trees.
+        if (!m_terrain_created_first) {
+            amrex::Abort(
+                "ForestDrag: model = roughness writes the TerrainDrag "
+                "roughness field; list TerrainDrag before ForestDrag in "
+                "incflo.physics");
+        }
+        for (auto& f : forests) {
+            f.m_roughness_z0 = forest_roughness(f);
+        }
+        amrex::Gpu::copy(
+            amrex::Gpu::hostToDevice, forests.begin(), forests.end(),
+            d_forests.begin());
+        auto& terrainz0 = m_sim.repo().get_field("terrainz0")(level);
+        const auto* forests_ptr = d_forests.data();
+        const auto* hull_edges_ptr = d_hull_edges.data();
+#ifdef AMREX_USE_OMP
+#pragma omp parallel if (amrex::Gpu::notInLaunchRegion())
+#endif
+        for (amrex::MFIter mfi(terrainz0); mfi.isValid(); ++mfi) {
+            const auto& gbx = mfi.growntilebox();
+            for (int nf = 0; nf < static_cast<int>(forests.size()); nf++) {
+                // Whole columns under the footprint, with one ghost layer
+                // beyond the domain in x and y.
+                auto column = forests[nf].bounding_box(geom);
+                column.grow(0, 1);
+                column.grow(1, 1);
+                column.setSmall(2, gbx.smallEnd(2));
+                column.setBig(2, gbx.bigEnd(2));
+                const auto bxi = gbx & column;
+                if (bxi.isEmpty()) {
+                    continue;
+                }
+                const auto& z0 = terrainz0.array(mfi);
+                const auto& levelId = fst_id.array(mfi);
+                const auto& ht = use_terrain
+                                     ? m_sim.repo()
+                                           .get_field("terrain_height")(level)
+                                           .const_array(mfi)
+                                     : amrex::Array4<amrex::Real const>();
+                amrex::ParallelFor(
+                    bxi, [=] AMREX_GPU_DEVICE(int i, int j, int k) {
+                        const auto x = prob_lo[0] + ((i + 0.5_rt) * dx[0]);
+                        const auto y = prob_lo[1] + ((j + 0.5_rt) * dx[1]);
+                        const auto& fst = forests_ptr[nf];
+                        if (!fst.in_footprint(x, y, hull_edges_ptr)) {
+                            return;
+                        }
+                        z0(i, j, k) = fst.m_roughness_z0;
+                        const auto z = prob_lo[2] + ((k + 0.5_rt) * dx[2]);
+                        const auto zagl = use_terrain ? z - ht(i, j, k) : z;
+                        if (zagl > 0.0_rt && zagl <= fst.m_height_forest) {
+                            levelId(i, j, k) = fst.m_id;
+                        }
+                    });
+            }
+        }
+        // The device copies of the forests go out of scope on return.
+        amrex::Gpu::streamSynchronize();
+        return;
+    }
 #ifdef AMREX_USE_OMP
 #pragma omp parallel if (amrex::Gpu::notInLaunchRegion())
 #endif
@@ -358,6 +467,19 @@ void ForestDrag::initialize_fields(int level, const amrex::Geometry& geom)
             }
         }
     }
+}
+
+amrex::Real ForestDrag::forest_roughness(const Forest& fst) const
+{
+    const bool use_z0 = !m_roughness_z0.empty();
+    const auto& values = use_z0 ? m_roughness_z0 : m_roughness_height_fraction;
+    if (values.size() > 1 && fst.m_id >= static_cast<int>(values.size())) {
+        amrex::Abort(
+            "ForestDrag: fewer roughness values than forests; give one value "
+            "for all forests or one per forest");
+    }
+    const auto value = (values.size() == 1) ? values[0] : values[fst.m_id];
+    return use_z0 ? value : value * fst.m_height_forest;
 }
 
 void ForestDrag::post_regrid_actions()

@@ -91,3 +91,59 @@ in :input_param:`incflo.physics`.
    Place the forests on the ``TerrainDrag`` terrain. Only used when
    ``TerrainDrag`` is active. Set it to false when the point-cloud ``z``
    coordinates are absolute heights rather than heights above the ground.
+
+.. input_param:: ForestDrag.model
+
+   **type:** String, optional, default = ``canopy``
+
+   Forest representation. ``canopy`` resolves the forest as a drag
+   :math:`C_d \, L` in the momentum equation (``forest_drag`` field, applied by
+   the ``ForestForcing`` source term). ``roughness`` applies no canopy drag:
+   each forest footprint writes its roughness length into the ``terrainz0``
+   field of ``TerrainDrag``, which the terrain wall model (``DragForcing``,
+   ``KransAxell``, ``DragTempForcing`` and the Kosovic model) uses in the
+   first cell above the terrain. The ``forest_drag`` field stays zero, so
+   ``ForestForcing`` and the canopy turbulence terms have no effect, and
+   ``forest_id`` marks the cells between the ground and the tree top.
+
+   The footprint is the cylinder cross section of a legacy forest, or the
+   :math:`x-y` convex hull of a point-cloud forest. No displacement height is
+   applied.
+
+   The ``roughness`` model requires ``TerrainDrag`` listed before
+   ``ForestDrag`` in :input_param:`incflo.physics`, otherwise the run aborts.
+   The roughness is then set in this order:
+
+   1. ``TerrainDrag`` fills ``terrainz0`` from
+      ``TerrainDrag.roughness_file``, or with 0.1 m where no file is given.
+   2. ``ForestDrag`` overwrites it inside every forest footprint, whole
+      columns, in the order of the forest file or of
+      :input_param:`ForestDrag.point_cloud_files`; where footprints overlap,
+      the later forest wins.
+
+   ``terrainz0`` only acts in cells above blanked terrain cells. On a flat
+   domain bottom without terrain cells, the ABL wall function uses the uniform
+   ``ABL.surface_roughness_z0`` and the forest roughness has no effect; raise
+   the ground by a whole number of cells in the terrain file to use it.
+
+.. input_param:: ForestDrag.roughness_z0
+
+   **type:** List of reals, optional
+
+   Roughness length (m) of the forests with
+   :input_param:`ForestDrag.model` = ``roughness``. One value applies to all
+   forests; otherwise give one value per forest, in the order of the forest
+   file or of :input_param:`ForestDrag.point_cloud_files`. Exactly one of
+   this parameter and :input_param:`ForestDrag.roughness_height_fraction`
+   must be given in roughness mode.
+
+.. input_param:: ForestDrag.roughness_height_fraction
+
+   **type:** List of reals, optional
+
+   Roughness length as a fraction :math:`c` of the tree height,
+   :math:`z_0 = c \, h`, with :input_param:`ForestDrag.model` =
+   ``roughness``. One value for all forests or one per forest. The height of
+   a point-cloud forest is the highest sample. A common choice is
+   :math:`c = 0.1`.
+

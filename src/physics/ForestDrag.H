@@ -62,6 +62,9 @@ struct Forest
     amrex::Real m_terrain_zmin{0.0_rt};
     amrex::Real m_terrain_zmax{0.0_rt};
 
+    // Roughness length written in the footprint in roughness mode.
+    amrex::Real m_roughness_z0{0.0_rt};
+
     // Compute the type-2 peak LAD scaling factor from integrated LAI.
     AMREX_GPU_DEVICE AMREX_FORCE_INLINE amrex::Real lm() const
     {
@@ -124,6 +127,22 @@ struct Forest
             }
         }
         return true;
+    }
+
+    // Horizontal footprint test: the cylinder cross section or the point-cloud
+    // convex hull.
+    AMREX_GPU_DEVICE AMREX_FORCE_INLINE bool in_footprint(
+        const amrex::Real px,
+        const amrex::Real py,
+        const ForestHullEdge* hull_edges) const
+    {
+        if (m_drag_mode == 0) {
+            const auto radius = std::sqrt(
+                ((px - m_x_forest) * (px - m_x_forest)) +
+                ((py - m_y_forest) * (py - m_y_forest)));
+            return radius <= (0.5_rt * m_diameter_forest);
+        }
+        return m_cloud_point_count > 0 && point_in_on_hull(px, py, hull_edges);
     }
 
     // Return real-space bounds for either point-cloud or cylindrical mode.
@@ -320,6 +339,17 @@ public:
         amrex::Vector<ForestPoint>& points,
         amrex::Vector<ForestHullEdge>& hull_edges) const;
 
+    //! True when the forests are represented by a roughness length
+    [[nodiscard]] bool roughness_mode() const { return m_roughness_mode; }
+
+    /** Roughness length of a forest in roughness mode
+     *
+     *  \param fst Forest descriptor
+     *  \return ForestDrag.roughness_z0, or
+     *  ForestDrag.roughness_height_fraction times the forest height
+     */
+    [[nodiscard]] amrex::Real forest_roughness(const Forest& fst) const;
+
 private:
     CFDSim& m_sim;
     // Output fields populated by this physics source.
@@ -345,6 +375,13 @@ private:
     // forest bounding boxes.
     amrex::Real m_terrain_zmin{0.0_rt};
     amrex::Real m_terrain_zmax{0.0_rt};
+
+    // ForestDrag.model = roughness: no canopy drag; each footprint writes its
+    // roughness length into the TerrainDrag terrainz0 field.
+    bool m_roughness_mode{false};
+    // One value for all forests, or one per forest.
+    amrex::Vector<amrex::Real> m_roughness_z0;
+    amrex::Vector<amrex::Real> m_roughness_height_fraction;
 };
 } // namespace kynema_sgf::forestdrag
 
