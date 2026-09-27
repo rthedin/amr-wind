@@ -584,6 +584,72 @@ TEST_F(ForestTest, roughness_mode_height_fraction)
     EXPECT_NEAR(utils::field_probe(z0, 0, 0, 0, 4), 0.1_rt, tol);
 }
 
+// A roughness length above half the first cell height is flagged: forest 3
+// (120 m) with z0 = 0.2 h = 24 m on 32 m cells, but not z0 = 0.1 h = 12 m
+TEST_F(ForestTest, roughness_mode_warns_large_z0)
+{
+    write_forest(m_forest_fname);
+    write_linear_terrain(
+        m_terrain_fname, 0.0_rt, 1024.0_rt, 0.0_rt, 1024.0_rt, 128.0_rt,
+        128.0_rt);
+    populate_parameters();
+    {
+        amrex::ParmParse pp("TerrainDrag");
+        pp.add("terrain_file", m_terrain_fname);
+    }
+    {
+        amrex::ParmParse pp("ForestDrag");
+        pp.add("model", std::string("roughness"));
+        amrex::Vector<amrex::Real> fraction{0.1_rt, 0.1_rt, 0.1_rt, 0.2_rt};
+        pp.addarr("roughness_height_fraction", fraction);
+    }
+    initialize_mesh();
+    sim().pde_manager().register_icns();
+    auto& terrain_drag = sim().physics_manager().create("TerrainDrag", sim());
+    auto& forest_drag = sim().physics_manager().create("ForestDrag", sim());
+    const auto& geom = sim().repo().mesh().Geom(0);
+    terrain_drag.initialize_fields(0, geom);
+    testing::internal::CaptureStdout();
+    forest_drag.initialize_fields(0, geom);
+    const std::string out = testing::internal::GetCapturedStdout();
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        EXPECT_NE(
+            out.find("WARNING: ForestDrag: roughness length"),
+            std::string::npos);
+    }
+    EXPECT_NEAR(
+        utils::field_probe(sim().repo().get_field("terrainz0"), 0, 16, 24, 4),
+        24.0_rt, kynema_sgf::constants::TIGHT_TOL);
+}
+
+TEST_F(ForestTest, roughness_mode_no_warning_small_z0)
+{
+    write_forest(m_forest_fname);
+    write_linear_terrain(
+        m_terrain_fname, 0.0_rt, 1024.0_rt, 0.0_rt, 1024.0_rt, 128.0_rt,
+        128.0_rt);
+    populate_parameters();
+    {
+        amrex::ParmParse pp("TerrainDrag");
+        pp.add("terrain_file", m_terrain_fname);
+    }
+    {
+        amrex::ParmParse pp("ForestDrag");
+        pp.add("model", std::string("roughness"));
+        pp.add("roughness_height_fraction", 0.1_rt);
+    }
+    initialize_mesh();
+    sim().pde_manager().register_icns();
+    auto& terrain_drag = sim().physics_manager().create("TerrainDrag", sim());
+    auto& forest_drag = sim().physics_manager().create("ForestDrag", sim());
+    const auto& geom = sim().repo().mesh().Geom(0);
+    terrain_drag.initialize_fields(0, geom);
+    testing::internal::CaptureStdout();
+    forest_drag.initialize_fields(0, geom);
+    const std::string out = testing::internal::GetCapturedStdout();
+    EXPECT_EQ(out.find("WARNING"), std::string::npos);
+}
+
 // Roughness mode writes the TerrainDrag field, so TerrainDrag is required
 TEST_F(ForestTest, roughness_mode_without_terrain_aborts)
 {

@@ -126,6 +126,12 @@ in :input_param:`incflo.physics`.
    ``ABL.surface_roughness_z0`` and the forest roughness has no effect; raise
    the ground by a whole number of cells in the terrain file to use it.
 
+   The wall model evaluates the log law at the first cell center,
+   :math:`\ln(\Delta z / (2 z_0))`, so the forest roughness must stay below
+   half the cell height, :math:`z_0 < \Delta z / 2`, and preferably well below
+   it. ``ForestDrag`` prints a warning on every level where this does not
+   hold. Roughness mode is meant for meshes that do not resolve the canopy.
+
 .. input_param:: ForestDrag.canopy_tke
 
    **type:** Boolean, optional, default = false

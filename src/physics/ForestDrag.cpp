@@ -245,8 +245,17 @@ void ForestDrag::initialize_fields(int level, const amrex::Geometry& geom)
                 "roughness field; list TerrainDrag before ForestDrag in "
                 "incflo.physics");
         }
+        amrex::Real z0_max = 0.0_rt;
         for (auto& f : forests) {
             f.m_roughness_z0 = forest_roughness(f);
+            z0_max = amrex::max<amrex::Real>(z0_max, f.m_roughness_z0);
+        }
+        // The terrain wall model applies ln(0.5 dz / z0) in the first cell
+        if (z0_max >= 0.5_rt * dx[2]) {
+            amrex::Print() << "WARNING: ForestDrag: roughness length " << z0_max
+                           << " m is not below half the cell height "
+                           << 0.5_rt * dx[2] << " m on level " << level
+                           << "; the terrain wall model needs z0 < dz / 2\n";
         }
         amrex::Gpu::copy(
             amrex::Gpu::hostToDevice, forests.begin(), forests.end(),
