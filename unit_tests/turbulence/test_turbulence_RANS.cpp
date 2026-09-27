@@ -338,4 +338,97 @@ TEST_F(TurbRANSTest, test_1eqKrans_canopy_tke_source)
     EXPECT_EQ(utils::field_probe(src_on, 0, i, j, 40), 0.0_rt);
 }
 
+// KLAxell with the forest present and ForestDrag.canopy_tke off: the eddy
+// viscosity is bit-identical to the run without a forest
+TEST_F(TurbRANSTest, test_1eqKrans_canopy_length_off)
+{
+    const amrex::Real rho0 = 1.2_rt;
+    add_klaxell_inputs(265.0_rt, 10.0_rt, rho0);
+    populate_parameters();
+    initialize_mesh();
+    sim().pde_manager().register_icns();
+    sim().init_physics();
+    sim().create_transport_model();
+    sim().create_turbulence_model();
+    sim().turbulence_model().post_init_actions();
+    auto& tmodel = sim().turbulence_model();
+
+    auto& repo = sim().repo();
+    init_strain_field(repo.get_field("velocity"), 0.01_rt);
+    repo.get_field("density").setVal(rho0);
+    init_temperature_field(repo.get_field("temperature"), 0.0_rt);
+    repo.get_field("turb_lscale").setVal(10.0_rt);
+    repo.get_field("tke").setVal(0.1_rt);
+    tmodel.update_turbulent_viscosity(
+        kynema_sgf::FieldState::New, DiffusionType::Crank_Nicolson);
+    auto& mu_no_forest = repo.declare_field("mu_no_forest", 1, 0, 1);
+    amrex::MultiFab::Copy(
+        mu_no_forest(0), repo.get_field("mu_turb")(0), 0, 0, 1, 0);
+
+    set_below(repo.declare_field("forest_drag", 1, 1, 1), 0.02_rt, 100.0_rt);
+    tmodel.update_turbulent_viscosity(
+        kynema_sgf::FieldState::New, DiffusionType::Crank_Nicolson);
+    amrex::MultiFab::Subtract(
+        mu_no_forest(0), repo.get_field("mu_turb")(0), 0, 0, 1, 0);
+    EXPECT_EQ(mu_no_forest(0).norm0(), 0.0_rt);
+}
+
+// ForestDrag.canopy_tke on: l = min(l_s, alpha / fd) in the canopy only
+TEST_F(TurbRANSTest, test_1eqKrans_canopy_length_on)
+{
+    const amrex::Real rho0 = 1.2_rt;
+    add_klaxell_inputs(265.0_rt, 10.0_rt, rho0);
+    {
+        amrex::ParmParse pp("ForestDrag");
+        pp.add("canopy_tke", true);
+    }
+    populate_parameters();
+    initialize_mesh();
+    sim().pde_manager().register_icns();
+    sim().init_physics();
+    sim().create_transport_model();
+    sim().create_turbulence_model();
+    sim().turbulence_model().post_init_actions();
+    auto& tmodel = sim().turbulence_model();
+
+    auto& repo = sim().repo();
+    init_strain_field(repo.get_field("velocity"), 0.01_rt);
+    repo.get_field("density").setVal(rho0);
+    init_temperature_field(repo.get_field("temperature"), 0.0_rt);
+    repo.get_field("turb_lscale").setVal(10.0_rt);
+    const amrex::Real tke_val = 0.1_rt;
+    repo.get_field("tke").setVal(tke_val);
+
+    // Zero forest drag: no limit anywhere
+    auto& forest = repo.declare_field("forest_drag", 1, 1, 1);
+    forest.setVal(0.0_rt);
+    tmodel.update_turbulent_viscosity(
+        kynema_sgf::FieldState::New, DiffusionType::Crank_Nicolson);
+    auto& mu_free = repo.declare_field("mu_free", 1, 0, 1);
+    amrex::MultiFab::Copy(mu_free(0), repo.get_field("mu_turb")(0), 0, 0, 1, 0);
+
+    // Canopy below 100 m: alpha / fd = 2.7 m, below l_s at every height
+    const amrex::Real fd = 0.02_rt;
+    set_below(forest, fd, 100.0_rt);
+    tmodel.update_turbulent_viscosity(
+        kynema_sgf::FieldState::New, DiffusionType::Crank_Nicolson);
+
+    const auto& mu = repo.get_field("mu_turb");
+    const auto& tlscale = repo.get_field("turb_lscale");
+    const amrex::Real Cmu = 0.556_rt;
+    const amrex::Real lcap = 0.054_rt / fd;
+    const amrex::Real mu_cap = rho0 * Cmu * lcap * std::sqrt(tke_val);
+    const amrex::Real tol = 10.0_rt * kynema_sgf::constants::TIGHT_TOL;
+    for (int k = 0; k < 6; ++k) {
+        EXPECT_NEAR(utils::field_probe(tlscale, 0, 5, 5, k), lcap, tol);
+        EXPECT_NEAR(utils::field_probe(mu, 0, 5, 5, k), mu_cap, tol);
+    }
+    // Above the canopy (z = 104 m and up) the eddy viscosity is unchanged
+    for (int k = 6; k < 64; k += 7) {
+        EXPECT_EQ(
+            utils::field_probe(mu, 0, 5, 5, k),
+            utils::field_probe(mu_free, 0, 5, 5, k));
+    }
+}
+
 } // namespace kynema_sgf_tests

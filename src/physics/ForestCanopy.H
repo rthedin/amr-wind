@@ -10,7 +10,7 @@ namespace kynema_sgf::forestdrag {
 
 /** Canopy turbulence inputs of the ForestDrag section
  *
- *  Read by the KransAxell TKE source of the KLAxell model. The
+ *  Read by the KLAxell turbulence model and its KransAxell TKE source. The
  *  canopy terms act where the forest_drag field (C_d * LAD) is positive, so
  *  they only need ForestDrag in canopy mode.
  */
@@ -22,6 +22,10 @@ struct CanopyTurbulence
     amrex::Real m_beta_p{1.0_rt};
     //! ForestDrag.canopy_beta_d: short-circuit dissipation coefficient
     amrex::Real m_beta_d{4.0_rt};
+    //! ForestDrag.canopy_length_alpha: KLAxell length scale limit
+    //! l <= alpha L_c; 0.054 = 2 beta^3 of Harman & Finnigan (2007) with
+    //! beta = u*/U_h = 0.3; zero disables the limit
+    amrex::Real m_length_alpha{0.054_rt};
 };
 
 //! Read the canopy turbulence inputs from the ForestDrag section
@@ -50,6 +54,28 @@ void add_canopy_tke_source(
     amrex::Real beta_p,
     amrex::Real beta_d,
     amrex::Real dt);
+
+/** Limit the turbulence length scale inside the canopy
+ *
+ *  l <= alpha L_c with the canopy drag length L_c = 1 / f. The eddy viscosity,
+ *  shear production and buoyancy production of KLAxell are linear in l, so
+ *  they are rescaled by the same factor. Only cells with f > 0 and
+ *  alpha L_c < l are changed.
+ *
+ *  \param forest_drag Forest drag field f = C_d LAD (1/m)
+ *  \param alpha Length limit coefficient
+ *  \param turb_lscale Turbulence length scale, valid cells updated
+ *  \param mu_turb Turbulent viscosity, valid cells updated
+ *  \param shear_prod Shear production, valid cells updated
+ *  \param buoy_prod Buoyancy production, valid cells updated
+ */
+void limit_canopy_length_scale(
+    const amrex::MultiFab& forest_drag,
+    amrex::Real alpha,
+    amrex::MultiFab& turb_lscale,
+    amrex::MultiFab& mu_turb,
+    amrex::MultiFab& shear_prod,
+    amrex::MultiFab& buoy_prod);
 
 } // namespace kynema_sgf::forestdrag
 

@@ -116,6 +116,29 @@ which tends to :math:`-c \, k` for :math:`c \Delta t \ll 1` and never
 removes more than the local :math:`k` in one step, so a dense canopy cannot
 drive :math:`k` negative.
 
+Inside a dense canopy the eddies are limited by the foliage rather than by
+the distance to the ground. ``KLAxell`` computes its length scale
+:math:`l = \lambda \kappa z / (\lambda + \kappa z)` from the height above the
+terrain, which overestimates the mixing near the canopy top. With
+``ForestDrag.canopy_tke = true`` the length scale is limited by the canopy
+drag length :math:`L_c = 1 / (C_d L)`,
+
+.. math::
+
+   l \leftarrow \min \left( l, \ \alpha L_c \right)
+   \qquad \text{where } C_d L > 0,
+
+where :math:`\alpha` is ``ForestDrag.canopy_length_alpha``. Harman and
+Finnigan (2007) give the mixing length in the canopy as
+:math:`l = 2 \beta^3 L_c` with :math:`\beta = u_* / U_h` the ratio of the
+friction velocity to the wind speed at the canopy top; the default
+:math:`\alpha = 0.054` is :math:`2 \beta^3` for the typical
+:math:`\beta = 0.3`. The eddy viscosity, the shear production and the
+buoyancy production of ``KLAxell`` are proportional to :math:`l` and are
+rescaled with it; the dissipation :math:`C_\mu^3 k^{3/2} / l` of the
+``KransAxell`` source uses the limited :math:`l`. Cells without forest drag
+are not changed.
+
 The canopy terms are off by default and are independent of the momentum drag:
 with ``ForestDrag.canopy_tke = false`` the forest only acts through
 ``ForestForcing``, as before.
@@ -128,6 +151,9 @@ References:
 - Liu, J., Chen, J. M., Black, T. A., & Novak, M. D. (1996). E-epsilon
   modelling of turbulent air flow downwind of a model forest edge.
   Boundary-Layer Meteorology, 77, 21-44.
+- Harman, I. N., & Finnigan, J. J. (2007). A simple unified theory for flow
+  in the canopy and roughness sublayer. Boundary-Layer Meteorology, 123,
+  339-363.
 - Sanz, C. (2003). A note on k-epsilon modelling of vegetation canopy
   air-flows. Boundary-Layer Meteorology, 108, 191-197.
 

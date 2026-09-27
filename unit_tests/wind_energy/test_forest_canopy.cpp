@@ -83,13 +83,14 @@ protected:
     }
 };
 
-// Defaults: off, beta_p = 1, beta_d = 4
+// Defaults: off, beta_p = 1, beta_d = 4, alpha = 0.054
 TEST_F(ForestCanopyTest, defaults)
 {
     const auto canopy = kynema_sgf::forestdrag::parse_canopy_turbulence();
     EXPECT_FALSE(canopy.m_enabled);
     EXPECT_EQ(canopy.m_beta_p, 1.0_rt);
     EXPECT_EQ(canopy.m_beta_d, 4.0_rt);
+    EXPECT_EQ(canopy.m_length_alpha, 0.054_rt);
 }
 
 TEST_F(ForestCanopyTest, inputs)
@@ -98,10 +99,12 @@ TEST_F(ForestCanopyTest, inputs)
     pp.add("canopy_tke", true);
     pp.add("canopy_beta_p", 0.8_rt);
     pp.add("canopy_beta_d", 5.1_rt);
+    pp.add("canopy_length_alpha", 0.1_rt);
     const auto canopy = kynema_sgf::forestdrag::parse_canopy_turbulence();
     EXPECT_TRUE(canopy.m_enabled);
     EXPECT_EQ(canopy.m_beta_p, 0.8_rt);
     EXPECT_EQ(canopy.m_beta_d, 5.1_rt);
+    EXPECT_EQ(canopy.m_length_alpha, 0.1_rt);
 }
 
 TEST_F(ForestCanopyTest, negative_coefficient_aborts)
@@ -176,6 +179,86 @@ TEST_F(ForestCanopyTest, sink_small_time_step)
     EXPECT_NEAR(
         utils::field_probe(src, 0, 3, 3, 0), explicit_sink,
         1.0e-5_rt * std::abs(explicit_sink));
+}
+
+// Length scale limit l <= alpha / fd, only where fd > 0: l = 10 m, with
+// mu_t, shear and buoyancy production rescaled by the same factor
+class ForestCanopyLengthTest : public ForestCanopyTest
+{
+protected:
+    void setup_length_fields(const amrex::Real fd)
+    {
+        setup_fields(fd, 0.5_rt);
+        auto& repo = sim().repo();
+        repo.declare_field("turb_lscale", 1, 0, 1).setVal(10.0_rt);
+        repo.declare_field("mu_turb", 1, 0, 1).setVal(2.0_rt);
+        repo.declare_field("shear_prod", 1, 0, 1).setVal(3.0_rt);
+        repo.declare_field("buoy_prod", 1, 0, 1).setVal(-1.0_rt);
+    }
+
+    void limit(const amrex::Real alpha)
+    {
+        auto& repo = sim().repo();
+        kynema_sgf::forestdrag::limit_canopy_length_scale(
+            repo.get_field("forest_drag")(0), alpha,
+            repo.get_field("turb_lscale")(0), repo.get_field("mu_turb")(0),
+            repo.get_field("shear_prod")(0), repo.get_field("buoy_prod")(0));
+    }
+
+    void expect_cell(
+        const int k,
+        const amrex::Real lscale,
+        const amrex::Real ratio,
+        const amrex::Real tol)
+    {
+        auto& repo = sim().repo();
+        EXPECT_NEAR(
+            utils::field_probe(repo.get_field("turb_lscale"), 0, 3, 3, k),
+            lscale, tol);
+        EXPECT_NEAR(
+            utils::field_probe(repo.get_field("mu_turb"), 0, 3, 3, k),
+            2.0_rt * ratio, tol);
+        EXPECT_NEAR(
+            utils::field_probe(repo.get_field("shear_prod"), 0, 3, 3, k),
+            3.0_rt * ratio, tol);
+        EXPECT_NEAR(
+            utils::field_probe(repo.get_field("buoy_prod"), 0, 3, 3, k),
+            -1.0_rt * ratio, tol);
+    }
+};
+
+TEST_F(ForestCanopyLengthTest, limit_inside_canopy_only)
+{
+    const amrex::Real fd = 0.02_rt;
+    const amrex::Real alpha = 0.054_rt;
+    setup_length_fields(fd);
+    limit(alpha);
+
+    // alpha / fd = 2.7 m < 10 m in the canopy (z < 4 m)
+    const amrex::Real tol = 10.0_rt * kynema_sgf::constants::TIGHT_TOL;
+    const amrex::Real lcap = alpha / fd;
+    expect_cell(0, lcap, lcap / 10.0_rt, tol);
+    expect_cell(3, lcap, lcap / 10.0_rt, tol);
+    // No forest drag: bit-identical
+    expect_cell(4, 10.0_rt, 1.0_rt, 0.0_rt);
+    expect_cell(7, 10.0_rt, 1.0_rt, 0.0_rt);
+}
+
+// A sparse canopy, alpha / fd = 27 m > 10 m, leaves the length scale
+TEST_F(ForestCanopyLengthTest, limit_above_length_scale)
+{
+    setup_length_fields(0.002_rt);
+    limit(0.054_rt);
+    expect_cell(0, 10.0_rt, 1.0_rt, 0.0_rt);
+    expect_cell(3, 10.0_rt, 1.0_rt, 0.0_rt);
+}
+
+// A vanishing drag must not overflow alpha / fd
+TEST_F(ForestCanopyLengthTest, limit_tiny_drag)
+{
+    setup_length_fields(1.0e-30_rt);
+    limit(0.054_rt);
+    expect_cell(0, 10.0_rt, 1.0_rt, 0.0_rt);
 }
 
 } // namespace kynema_sgf_tests

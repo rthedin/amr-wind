@@ -11,10 +11,12 @@ CanopyTurbulence parse_canopy_turbulence()
     pp.query("canopy_tke", canopy.m_enabled);
     pp.query("canopy_beta_p", canopy.m_beta_p);
     pp.query("canopy_beta_d", canopy.m_beta_d);
-    if (canopy.m_beta_p < 0.0_rt || canopy.m_beta_d < 0.0_rt) {
+    pp.query("canopy_length_alpha", canopy.m_length_alpha);
+    if (canopy.m_beta_p < 0.0_rt || canopy.m_beta_d < 0.0_rt ||
+        canopy.m_length_alpha < 0.0_rt) {
         amrex::Abort(
-            "ForestDrag: canopy_beta_p and canopy_beta_d must not be "
-            "negative");
+            "ForestDrag: canopy_beta_p, canopy_beta_d and canopy_length_alpha "
+            "must not be negative");
     }
     return canopy;
 }
@@ -47,6 +49,36 @@ void add_canopy_tke_source(
                     (beta_p * fd * ws * ws * ws) +
                     (tke_arrs[nbx](i, j, k) *
                      std::expm1(-beta_d * fd * ws * dt) / dt);
+            }
+        });
+}
+
+void limit_canopy_length_scale(
+    const amrex::MultiFab& forest_drag,
+    const amrex::Real alpha,
+    amrex::MultiFab& turb_lscale,
+    amrex::MultiFab& mu_turb,
+    amrex::MultiFab& shear_prod,
+    amrex::MultiFab& buoy_prod)
+{
+    auto const& forest_arrs = forest_drag.const_arrays();
+    auto const& tlscale_arrs = turb_lscale.arrays();
+    auto const& mu_arrs = mu_turb.arrays();
+    auto const& shear_prod_arrs = shear_prod.arrays();
+    auto const& buoy_prod_arrs = buoy_prod.arrays();
+    amrex::ParallelFor(
+        mu_turb, amrex::IntVect(0),
+        [=] AMREX_GPU_DEVICE(int nbx, int i, int j, int k) {
+            const amrex::Real fd = forest_arrs[nbx](i, j, k);
+            const amrex::Real lscale = tlscale_arrs[nbx](i, j, k);
+            // alpha / fd < lscale, written without dividing by a small fd
+            const amrex::Real lscale_fd = lscale * fd;
+            if (fd > 0.0_rt && alpha < lscale_fd) {
+                const amrex::Real ratio = alpha / lscale_fd;
+                tlscale_arrs[nbx](i, j, k) = alpha / fd;
+                mu_arrs[nbx](i, j, k) *= ratio;
+                shear_prod_arrs[nbx](i, j, k) *= ratio;
+                buoy_prod_arrs[nbx](i, j, k) *= ratio;
             }
         });
 }

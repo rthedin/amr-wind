@@ -132,7 +132,8 @@ in :input_param:`incflo.physics`.
 
    Add the canopy wake production and short-circuit dissipation to the TKE
    equation of the ``KLAxell`` model (``KransAxell`` source),
-   :math:`S_k = C_d L (\beta_p |U|^3 - \beta_d |U| k)`, where the
+   :math:`S_k = C_d L (\beta_p |U|^3 - \beta_d |U| k)`, and limit the
+   ``KLAxell`` length scale to :math:`\alpha / (C_d L)`, where the
    ``forest_drag`` field :math:`C_d L` is positive. Off by default, which
    keeps the drag-only forest model. Requires ``ForestDrag`` in
    :input_param:`incflo.physics`; has no effect with
@@ -151,6 +152,16 @@ in :input_param:`incflo.physics`.
 
    Short-circuit dissipation coefficient :math:`\beta_d`. The sink
    :math:`-\beta_d C_d L |U| k` is integrated exactly over the time step.
+
+.. input_param:: ForestDrag.canopy_length_alpha
+
+   **type:** Real, optional, default = 0.054
+
+   Coefficient :math:`\alpha` of the ``KLAxell`` length scale limit
+   :math:`l \le \alpha L_c` with the canopy drag length
+   :math:`L_c = 1 / (C_d L)`. The default is :math:`2 \beta^3` of Harman and
+   Finnigan (2007) with :math:`\beta = u_*/U_h = 0.3`. Zero disables the
+   limit and keeps the TKE source.
 
 .. input_param:: ForestDrag.roughness_z0
 
