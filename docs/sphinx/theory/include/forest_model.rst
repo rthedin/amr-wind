@@ -87,6 +87,50 @@ The point-cloud model is useful when remote-sensing products or preprocessed can
 individual forest patches. Compared with the simplified uniform or analytical vertical-profile models, this approach allows the drag field
 to vary in all three spatial directions while still using a compact set of scattered sample points.
 
+Canopy turbulence
+~~~~~~~~~~~~~~~~~
+
+The canopy drag removes mean kinetic energy from the flow. Part of it becomes
+turbulence in the wakes of leaves and branches at scales much smaller than the
+mesh, which then dissipates quickly (the spectral short cut). With the
+one-equation ``KLAxell`` model, ``ForestDrag.canopy_tke = true`` adds these
+effects to the ``KransAxell`` TKE source,
+
+.. math::
+
+   S_k = C_d L \left( \beta_p |U|^3 - \beta_d |U| k \right),
+
+where :math:`C_d L` is the ``forest_drag`` field, :math:`\beta_p` is the
+fraction of the drag work converted to TKE (``ForestDrag.canopy_beta_p``,
+default 1) and :math:`\beta_d` sets the short-circuit dissipation
+(``ForestDrag.canopy_beta_d``, default 4, following Green (1992),
+Liu et al. (1996) and Sanz (2003)). The sink is a relaxation of :math:`k` at
+the rate :math:`c = \beta_d C_d L |U|`. It is integrated exactly over a time
+step,
+
+.. math::
+
+   S_{k,\mathrm{sink}} = -k \, \frac{1 - e^{-c \Delta t}}{\Delta t},
+
+which tends to :math:`-c \, k` for :math:`c \Delta t \ll 1` and never
+removes more than the local :math:`k` in one step, so a dense canopy cannot
+drive :math:`k` negative.
+
+The canopy terms are off by default and are independent of the momentum drag:
+with ``ForestDrag.canopy_tke = false`` the forest only acts through
+``ForestForcing``, as before.
+
+References:
+
+- Green, S. R. (1992). Modelling turbulent air flow in a stand of widely-spaced
+  trees. PHOENICS Journal of Computational Fluid Dynamics and Its
+  Applications, 5, 294-312.
+- Liu, J., Chen, J. M., Black, T. A., & Novak, M. D. (1996). E-epsilon
+  modelling of turbulent air flow downwind of a model forest edge.
+  Boundary-Layer Meteorology, 77, 21-44.
+- Sanz, C. (2003). A note on k-epsilon modelling of vegetation canopy
+  air-flows. Boundary-Layer Meteorology, 108, 191-197.
+
 Roughness representation
 ~~~~~~~~~~~~~~~~~~~~~~~~
 

@@ -126,6 +126,32 @@ in :input_param:`incflo.physics`.
    ``ABL.surface_roughness_z0`` and the forest roughness has no effect; raise
    the ground by a whole number of cells in the terrain file to use it.
 
+.. input_param:: ForestDrag.canopy_tke
+
+   **type:** Boolean, optional, default = false
+
+   Add the canopy wake production and short-circuit dissipation to the TKE
+   equation of the ``KLAxell`` model (``KransAxell`` source),
+   :math:`S_k = C_d L (\beta_p |U|^3 - \beta_d |U| k)`, where the
+   ``forest_drag`` field :math:`C_d L` is positive. Off by default, which
+   keeps the drag-only forest model. Requires ``ForestDrag`` in
+   :input_param:`incflo.physics`; has no effect with
+   :input_param:`ForestDrag.model` = ``roughness``.
+
+.. input_param:: ForestDrag.canopy_beta_p
+
+   **type:** Real, optional, default = 1.0
+
+   Wake production coefficient :math:`\beta_p`: fraction of the drag work
+   :math:`C_d L |U|^3` converted to TKE.
+
+.. input_param:: ForestDrag.canopy_beta_d
+
+   **type:** Real, optional, default = 4.0
+
+   Short-circuit dissipation coefficient :math:`\beta_d`. The sink
+   :math:`-\beta_d C_d L |U| k` is integrated exactly over the time step.
+
 .. input_param:: ForestDrag.roughness_z0
 
    **type:** List of reals, optional
