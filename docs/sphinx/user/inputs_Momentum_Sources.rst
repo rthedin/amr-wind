@@ -93,6 +93,60 @@ Section: Momentum Sources
    an input file for Body Forcing. The output file will contain the time and three vector
    components of the force.
 
+   With :input_param:`ABLForcing.free_atmosphere_damping`, the file also
+   contains the geostrophic wind that balances the forcing and the
+   free-atmosphere height.
+
+.. input_param:: ABLForcing.free_atmosphere_damping
+
+   **type:** Boolean, optional, default = false
+
+   Relax the planar-averaged velocity above a free-atmosphere height :math:`h`
+   toward the geostrophic wind that balances the ABL forcing :math:`\mathbf{F}`,
+   :math:`U_g = F_y / f` and :math:`V_g = -F_x / f`, with the source term
+   :math:`(U_g - \langle u \rangle(z)) / \tau` and :math:`(V_g - \langle v \rangle(z)) / \tau`
+   for :math:`z \geq h`. This removes the inertial oscillations of the free
+   atmosphere that the time-varying forcing otherwise excites. The Coriolis
+   parameter :math:`f = 2 \Omega \sin \phi` is computed from the
+   ``CoriolisForcing`` inputs, and ``CoriolisForcing`` must be one of the
+   ``ICNS.source_terms``. As in ``GeostrophicForcing``, :math:`x` is east and
+   :math:`y` is north. The forcing of a timestep corrects the drift of the
+   previous one, so the damping starts at the second timestep after start-up.
+
+.. input_param:: ABLForcing.free_atmosphere_height
+
+   **type:** Real, mandatory with :input_param:`ABLForcing.free_atmosphere_damping`
+   unless :input_param:`ABLForcing.detect_free_atmosphere_height` is true
+
+   Height (in the domain coordinates) above which the free atmosphere is damped.
+
+.. input_param:: ABLForcing.detect_free_atmosphere_height
+
+   **type:** Boolean, optional, default = false
+
+   Set the free-atmosphere height to the capping inversion height every
+   timestep. The capping inversion height is the planar average of the height of
+   the largest vertical potential temperature gradient on level 0, as in the ABL
+   statistics output. It is meant for boundary layers under a capping inversion.
+
+.. input_param:: ABLForcing.free_atmosphere_damping_time_scale
+
+   **type:** Real, optional, default = 100.0
+
+   Relaxation time scale :math:`\tau` in seconds.
+
+.. input_param:: ABLForcing.free_atmosphere_damping_start_time
+
+   **type:** Real, optional, default = 0.0
+
+   Time at which the free-atmosphere damping starts.
+
+.. input_param:: ABLForcing.free_atmosphere_damping_end_time
+
+   **type:** Real, optional, default = no end
+
+   Time at which the free-atmosphere damping ends.
+
 .. input_param:: ABLForcing.forcing_timetable_frequency
 
    **type:** Int, optional
@@ -271,6 +325,86 @@ Section: Momentum Sources
    the analytical model for the form drag, activated by setting this option to true, can be used to compensate
    for the lack of resolution. Therefore, this option should remain set to false except in scenarios
    when the form drag is known to be under-resolved.
+
+The following arguments are influential when ``MetMastForcing`` is included in
+:input_param:`ICNS.source_terms`. The source term relaxes the velocity towards
+met-mast and lidar measurements. Each measurement station is a horizontal
+location and a profile of one or more heights. Station :math:`i` has the weight
+
+.. math::
+
+   w_i = \exp\left(-\frac{1}{4}\left[\frac{r_i^2}{R_h^2} + \frac{d_i^2}{R_z^2}\right]\right)
+
+where :math:`r_i` is the horizontal distance to the station and :math:`d_i` is
+the vertical distance outside the measured height range, which is zero inside
+it. The target :math:`t_i` is the measured velocity :math:`\bar{u}_i`,
+interpolated linearly in height, widened to the band
+:math:`\bar{u}_i \pm \alpha \sigma_i` so that only the part of the velocity
+outside the measured variability is forced. The stations are combined into one
+relaxation
+
+.. math::
+
+   S = -\min\left(\frac{W}{\tau}, \frac{1}{\Delta t}\right) (u - \bar{t}), \quad
+   W = \min\left(1, \sum_i w_i\right), \quad
+   \bar{t} = \frac{\sum_i w_i t_i}{\sum_i w_i}
+
+When ``TerrainDrag`` is active, the heights are above the local terrain and the
+cells inside the terrain are not forced.
+
+.. input_param:: ABL.metmast_1dprofile_file
+
+   **type:** String, optional
+
+   File with met-mast points, one per line: ``x y z u v w T``, where ``z`` is
+   the height above the terrain. The temperature ``T`` is not used. At least one
+   of this file and :input_param:`ABL.metmast_profile_files` is required.
+
+.. input_param:: ABL.metmast_profile_files
+
+   **type:** List of strings, optional
+
+   Lidar profile files, one per lidar. The first line is the location ``x y``,
+   followed by one line per height ``z u v w su sv sw`` in increasing order of
+   ``z``, the height above the terrain. ``su``, ``sv`` and ``sw`` are the
+   standard deviations of the velocity components. Above and below the measured
+   heights, the end values are used and the weight is tapered with
+   :input_param:`ABL.metmast_vertical_radius`.
+
+.. input_param:: ABL.metmast_timescale
+
+   **type:** Real, optional, default = ``ABL.meso_timescale`` or 30.0
+
+   Relaxation time scale :math:`\tau` in seconds. The relaxation rate is
+   limited to :math:`1/\Delta t`.
+
+.. input_param:: ABL.metmast_horizontal_radius
+
+   **type:** Real, optional, default = 500.0
+
+   Horizontal radius :math:`R_h` of the forcing around each station.
+
+.. input_param:: ABL.metmast_vertical_radius
+
+   **type:** Real, optional, default = 25.0
+
+   Vertical radius :math:`R_z` of the forcing around a met-mast point, and of
+   the taper above and below a lidar profile.
+
+.. input_param:: ABL.metmast_damping_radius
+
+   **type:** Real, optional, default = 1400.0
+
+   Cutoff on the normalized squared distance
+   :math:`r_i^2/R_h^2 + d_i^2/R_z^2` beyond which a station does not force.
+
+.. input_param:: ABL.metmast_sigma_factor
+
+   **type:** Real, optional, default = 1.0
+
+   Half-width :math:`\alpha` of the tolerance band in standard deviations. A
+   value of 0 relaxes the velocity to the measured mean. Met-mast points have
+   no standard deviation and are always relaxed to the mean.
 
 
 The following arguments are influential when ``GravityForcing`` is included in :input_param:`ICNS.source_terms`.
