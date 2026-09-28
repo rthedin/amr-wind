@@ -91,6 +91,7 @@ ForestDrag::ForestDrag(CFDSim& sim)
     : m_sim(sim)
     , m_forest_drag(sim.repo().declare_field("forest_drag", 1, 1, 1))
     , m_forest_id(sim.repo().declare_field("forest_id", 1, 1, 1))
+    , m_terrain_created_first(sim.physics_manager().contains("TerrainDrag"))
 {
 
     // Accept either legacy cylinder input or point-cloud input, but not both.
@@ -104,6 +105,7 @@ ForestDrag::ForestDrag(CFDSim& sim)
             "'point_cloud_files'");
     }
     pp.queryarr("point_cloud_files", m_point_cloud_files);
+    pp.query("terrain_aware", m_terrain_aware);
     if (point_forest) {
         // One drag coefficient is required per point-cloud forest file.
         pp.getarr("coefficients_of_drag", m_forest_cd);
@@ -131,6 +133,25 @@ ForestDrag::ForestDrag(CFDSim& sim)
 void ForestDrag::initialize_fields(int level, const amrex::Geometry& geom)
 {
     BL_PROFILE("kynema-sgf::" + this->identifier() + "::initialize_fields");
+
+    // With TerrainDrag, the forests stand on the local terrain. Physics are
+    // initialized in the incflo.physics order, so TerrainDrag must come first
+    // for terrain_height to be filled before it is used here.
+    const bool use_terrain =
+        m_terrain_aware && m_sim.physics_manager().contains("TerrainDrag");
+    if (use_terrain && !m_terrain_created_first) {
+        amrex::Abort(
+            "ForestDrag: list TerrainDrag before ForestDrag in incflo.physics, "
+            "or set ForestDrag.terrain_aware = false");
+    }
+    m_terrain_zmin = 0.0_rt;
+    m_terrain_zmax = 0.0_rt;
+    if (use_terrain) {
+        const auto& terrain_height =
+            m_sim.repo().get_field("terrain_height")(level);
+        m_terrain_zmin = terrain_height.min(0);
+        m_terrain_zmax = terrain_height.max(0);
+    }
 
     // Build host-side forest metadata for the requested AMR level.
     amrex::Vector<ForestPoint> cloud_points;
@@ -186,6 +207,41 @@ void ForestDrag::initialize_fields(int level, const amrex::Geometry& geom)
                 const auto* hull_edges_ptr = d_hull_edges.data();
                 const int num_neighbors = m_point_neighbors;
                 const amrex::Real interp_eps = m_point_interp_eps;
+                if (use_terrain) {
+                    // Heights of the forest and point-cloud files are above
+                    // the local ground; no drag inside the terrain.
+                    const auto& ht = m_sim.repo()
+                                         .get_field("terrain_height")(level)
+                                         .const_array(mfi);
+                    const amrex::Real half_dz = 0.5_rt * dx[2];
+                    amrex::ParallelFor(
+                        bxi, [=] AMREX_GPU_DEVICE(int i, int j, int k) {
+                            const auto x = prob_lo[0] + ((i + 0.5_rt) * dx[0]);
+                            const auto y = prob_lo[1] + ((j + 0.5_rt) * dx[1]);
+                            const auto z = prob_lo[2] + ((k + 0.5_rt) * dx[2]);
+                            const auto zagl = z - ht(i, j, k);
+                            if (zagl <= 0.0_rt) {
+                                return;
+                            }
+                            const auto& fst = forests_ptr[nf];
+                            if (fst.m_drag_mode == 0) {
+                                amrex::Real lad = 0.0_rt;
+                                if (cylinder_lad(fst, x, y, zagl, lad)) {
+                                    levelId(i, j, k) = fst.m_id;
+                                    levelDrag(i, j, k) += fst.m_cd_forest * lad;
+                                }
+                            } else {
+                                const auto lad = point_cloud_lad(
+                                    fst, points_ptr, hull_edges_ptr, x, y, zagl,
+                                    half_dz, num_neighbors, interp_eps);
+                                if (lad > 0.0_rt) {
+                                    levelId(i, j, k) = fst.m_id;
+                                    levelDrag(i, j, k) += fst.m_cd_forest * lad;
+                                }
+                            }
+                        });
+                    continue;
+                }
                 amrex::ParallelFor(
                     bxi, [=] AMREX_GPU_DEVICE(int i, int j, int k) {
                         // Convert integer cell indices to cell-center
@@ -341,6 +397,8 @@ amrex::Vector<Forest> ForestDrag::read_cylinder_forests(const int level) const
         f.m_cd_forest = value6;
         f.m_lai_forest = value7;
         f.m_laimax_forest = value8;
+        f.m_terrain_zmin = m_terrain_zmin;
+        f.m_terrain_zmax = m_terrain_zmax;
 
         // Keep only forests intersecting this rank's local level boxes.
         const auto bx = f.bounding_box(geom);
@@ -489,6 +547,8 @@ amrex::Vector<Forest> ForestDrag::read_point_cloud_forests(
         f.m_type_forest = 0.0_rt;
         f.m_lai_forest = 0.0_rt;
         f.m_laimax_forest = 0.0_rt;
+        f.m_terrain_zmin = m_terrain_zmin;
+        f.m_terrain_zmax = m_terrain_zmax;
 
         // Keep only forests intersecting this rank's local level boxes.
         if (ba.intersects(f.bounding_box(geom))) {
