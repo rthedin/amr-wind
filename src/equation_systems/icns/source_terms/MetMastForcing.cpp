@@ -78,6 +78,9 @@ void add_forcing(
     amrex::ParallelFor(
         src_term, amrex::IntVect(0),
         [=] AMREX_GPU_DEVICE(int nbx, int i, int j, int k) {
+            // nvcc: an extended device lambda cannot first-capture a variable
+            // inside an if-constexpr block, so touch both arrays here.
+            amrex::ignore_unused(terrain_arrs, blank_arrs);
             amrex::Real z = prob_lo[2] + ((k + 0.5_rt) * dx[2]);
             if constexpr (HasTerrain) {
                 if (blank_arrs[nbx](i, j, k) == 1) {
