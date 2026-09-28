@@ -10,6 +10,7 @@ target_sources(${kynema_sgf_unit_test_exe_name} PRIVATE
   test_abl_src_timetable.cpp
   test_abl_terrain.cpp
   test_abl_forest.cpp
+  test_forest_canopy.cpp
   test_abl_metmast.cpp
   test_abl_mo.cpp
   test_abl_surface_temperature.cpp
