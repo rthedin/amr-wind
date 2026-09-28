@@ -39,6 +39,14 @@ void write_type2_forest_top_on_center(const std::string& fname)
     os << "2  512 512 48 200 0.2 6 0.8 \n";
 }
 
+// Two uniform forests on the 1 m grid: 6 m tall (6 cells) and 4 m tall
+void write_small_forests(const std::string& fname)
+{
+    std::ofstream os(fname);
+    os << "1  2 4 6 3 0.2 2 0.8 \n";
+    os << "1  6 4 4 3 0.2 2 0.8 \n";
+}
+
 // Terrain on a 2 x 2 grid, linear in x: height = z_west + slope * (x - x_west)
 void write_linear_terrain(
     const std::string& fname,
@@ -754,6 +762,85 @@ TEST_F(PointCloudForestTest, roughness_mode_point_cloud_hull)
         kynema_sgf::field_ops::global_max_magnitude(
             sim().repo().get_field("forest_drag")),
         0.0_rt);
+}
+
+// The canopy model warns when forests span fewer than 5 cells: the four
+// forests of 35 to 120 m on 32 m cells are all under-resolved
+TEST_F(ForestTest, canopy_resolution_warns)
+{
+    write_forest(m_forest_fname);
+    populate_parameters();
+    initialize_mesh();
+    sim().pde_manager().register_icns();
+    kynema_sgf::forestdrag::ForestDrag forest_drag(sim());
+    forest_drag.initialize_fields(0, sim().repo().mesh().Geom(0));
+    testing::internal::CaptureStdout();
+    const int n_coarse = forest_drag.check_canopy_resolution();
+    const std::string out = testing::internal::GetCapturedStdout();
+    EXPECT_EQ(n_coarse, 4);
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        EXPECT_NE(
+            out.find("WARNING: ForestDrag: 4 forest(s) span fewer than 5"),
+            std::string::npos);
+        // Forest 1 (35 m) is the worst resolved
+        EXPECT_NE(out.find("forest 1 spans"), std::string::npos);
+    }
+}
+
+// Roughness mode does not resolve the canopy, so it never warns
+TEST_F(ForestTest, canopy_resolution_roughness_mode_silent)
+{
+    write_forest(m_forest_fname);
+    write_linear_terrain(
+        m_terrain_fname, 0.0_rt, 1024.0_rt, 0.0_rt, 1024.0_rt, 128.0_rt,
+        128.0_rt);
+    populate_parameters();
+    {
+        amrex::ParmParse pp("TerrainDrag");
+        pp.add("terrain_file", m_terrain_fname);
+    }
+    {
+        amrex::ParmParse pp("ForestDrag");
+        pp.add("model", std::string("roughness"));
+        pp.add("roughness_z0", 1.0_rt);
+    }
+    initialize_mesh();
+    sim().pde_manager().register_icns();
+    auto& terrain_drag = sim().physics_manager().create("TerrainDrag", sim());
+    auto& forest_drag = sim().physics_manager().create("ForestDrag", sim());
+    const auto& geom = sim().repo().mesh().Geom(0);
+    terrain_drag.initialize_fields(0, geom);
+    forest_drag.initialize_fields(0, geom);
+    testing::internal::CaptureStdout();
+    const int n_coarse =
+        dynamic_cast<kynema_sgf::forestdrag::ForestDrag&>(forest_drag)
+            .check_canopy_resolution();
+    const std::string out = testing::internal::GetCapturedStdout();
+    EXPECT_EQ(n_coarse, 0);
+    EXPECT_EQ(out.find("WARNING"), std::string::npos);
+}
+
+// On 1 m cells a 6 m forest is resolved and a 4 m forest is not
+TEST_F(PointCloudForestTest, canopy_resolution_threshold)
+{
+    const std::string fname = "forest_small.amrwind";
+    write_small_forests(fname);
+    populate_parameters();
+    {
+        amrex::ParmParse pp("ForestDrag");
+        pp.add("forest_file", fname);
+    }
+    initialize_mesh();
+    sim().pde_manager().register_icns();
+    kynema_sgf::forestdrag::ForestDrag forest_drag(sim());
+    forest_drag.initialize_fields(0, sim().repo().mesh().Geom(0));
+    testing::internal::CaptureStdout();
+    const int n_coarse = forest_drag.check_canopy_resolution();
+    const std::string out = testing::internal::GetCapturedStdout();
+    EXPECT_EQ(n_coarse, 1);
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        EXPECT_NE(out.find("forest 1 spans 4"), std::string::npos);
+    }
 }
 
 } // namespace kynema_sgf_tests

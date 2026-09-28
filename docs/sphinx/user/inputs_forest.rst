@@ -106,6 +106,17 @@ in :input_param:`incflo.physics`.
    ``ForestForcing`` and the canopy turbulence terms have no effect, and
    ``forest_id`` marks the cells between the ground and the tree top.
 
+   Recommended use: when the mesh resolves the canopy, with about 5 to 10 or
+   more cells over the canopy height (the validation against Shaw and Schumann
+   (1992) used 10), use ``canopy`` and, with ``KLAxell``, set
+   :input_param:`ForestDrag.canopy_tke` = true. When the canopy spans only one
+   or two cells or fewer, use ``roughness``. Roughness mode on a mesh that
+   resolves the canopy overestimates the wind above it, because it has no
+   displacement height. In canopy mode, ``ForestDrag`` prints a warning after
+   initialization and after each regrid when a forest spans fewer than 5 cells
+   of the finest level; for a point-cloud forest the height is that of its
+   highest sample.
+
    The footprint is the cylinder cross section of a legacy forest, or the
    :math:`x-y` convex hull of a point-cloud forest. No displacement height is
    applied.

@@ -321,7 +321,7 @@ public:
 
     void pre_init_actions() override {}
 
-    void post_init_actions() override {}
+    void post_init_actions() override;
 
     void post_regrid_actions() override;
 
@@ -349,6 +349,18 @@ public:
      *  ForestDrag.roughness_height_fraction times the forest height
      */
     [[nodiscard]] amrex::Real forest_roughness(const Forest& fst) const;
+
+    /** Warn when the canopy model does not resolve the forests
+     *
+     *  In canopy mode, prints one warning when a forest is shorter than
+     *  min_canopy_cells() cells of the finest level. Nothing in roughness mode.
+     *
+     *  \return Number of under-resolved forests
+     */
+    int check_canopy_resolution() const;
+
+    //! Cells over the canopy height below which the canopy model warns
+    static constexpr int min_canopy_cells() { return 5; }
 
 private:
     CFDSim& m_sim;

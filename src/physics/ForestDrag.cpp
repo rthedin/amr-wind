@@ -491,6 +491,8 @@ amrex::Real ForestDrag::forest_roughness(const Forest& fst) const
     return use_z0 ? value : value * fst.m_height_forest;
 }
 
+void ForestDrag::post_init_actions() { check_canopy_resolution(); }
+
 void ForestDrag::post_regrid_actions()
 {
     // Forest fields depend on geometry and valid boxes, so recompute on regrid.
@@ -498,6 +500,47 @@ void ForestDrag::post_regrid_actions()
     for (int lev = 0; lev < nlevels; ++lev) {
         initialize_fields(lev, m_sim.repo().mesh().Geom(lev));
     }
+    check_canopy_resolution();
+}
+
+int ForestDrag::check_canopy_resolution() const
+{
+    if (m_roughness_mode) {
+        return 0;
+    }
+    // The finest level gives the best resolution any forest can have.
+    const int finest = m_sim.repo().num_active_levels() - 1;
+    const amrex::Real dz = m_sim.repo().mesh().Geom(finest).CellSize(2);
+    amrex::Vector<ForestPoint> cloud_points;
+    amrex::Vector<ForestHullEdge> hull_edges;
+    const auto forests =
+        m_point_cloud_files.empty()
+            ? read_cylinder_forests(finest)
+            : read_point_cloud_forests(finest, cloud_points, hull_edges);
+    int n_coarse = 0;
+    int worst_id = -1;
+    amrex::Real worst_cells = constants::LARGE_NUM;
+    for (const auto& f : forests) {
+        const amrex::Real cells = f.m_height_forest / dz;
+        if (cells < static_cast<amrex::Real>(min_canopy_cells())) {
+            ++n_coarse;
+        }
+        if (cells < worst_cells) {
+            worst_cells = cells;
+            worst_id = f.m_id;
+        }
+    }
+    if (n_coarse > 0) {
+        amrex::Print()
+            << "WARNING: ForestDrag: " << n_coarse
+            << " forest(s) span fewer than " << min_canopy_cells()
+            << " cells of the finest level (dz = " << dz << " m); forest "
+            << worst_id << " spans " << worst_cells
+            << ". The canopy model needs about 5-10 cells over the canopy "
+               "height (validated with 10); refine the mesh or use "
+               "ForestDrag.model = roughness\n";
+    }
+    return n_coarse;
 }
 
 amrex::Vector<Forest> ForestDrag::read_cylinder_forests(const int level) const
