@@ -131,9 +131,17 @@ drag length :math:`L_c = 1 / (C_d L)`,
 where :math:`\alpha` is ``ForestDrag.canopy_length_alpha``. Harman and
 Finnigan (2007) give the mixing length in the canopy as
 :math:`l = 2 \beta^3 L_c` with :math:`\beta = u_* / U_h` the ratio of the
-friction velocity to the wind speed at the canopy top; the default
-:math:`\alpha = 0.054` is :math:`2 \beta^3` for the typical
-:math:`\beta = 0.3`. The eddy viscosity, the shear production and the
+friction velocity to the wind speed at the canopy top, so
+:math:`\alpha = 2 \beta^3`. The default :math:`\alpha = 0.04`
+(:math:`\beta \approx 0.27`) was chosen from a sweep of
+:math:`\alpha` = 0.02 to 0.07 in a one-dimensional analogue of the
+Shaw and Schumann (1992) large-eddy simulation (canopy depth ratio, drag
+coefficient and leaf area density profiles of their LAI = 2 and 5 cases):
+it gave the smallest combined error in the mean wind and momentum flux
+profiles for both canopies, and the runs settle at
+:math:`\beta = u_*/U_h` of 0.25 to 0.27, consistent with
+:math:`2 \beta^3 \approx 0.04`. The typical :math:`\beta = 0.3` would give
+0.054, which leaves the wind in a sparse canopy too strong. The eddy viscosity, the shear production and the
 buoyancy production of ``KLAxell`` are proportional to :math:`l` and are
 rescaled with it; the dissipation :math:`C_\mu^3 k^{3/2} / l` of the
 ``KransAxell`` source uses the limited :math:`l`. Cells without forest drag
@@ -154,6 +162,8 @@ References:
 - Harman, I. N., & Finnigan, J. J. (2007). A simple unified theory for flow
   in the canopy and roughness sublayer. Boundary-Layer Meteorology, 123,
   339-363.
+- Shaw, R. H., & Schumann, U. (1992). Large-eddy simulation of turbulent
+  flow above and within a forest. Boundary-Layer Meteorology, 61, 47-64.
 - Sanz, C. (2003). A note on k-epsilon modelling of vegetation canopy
   air-flows. Boundary-Layer Meteorology, 108, 191-197.
 

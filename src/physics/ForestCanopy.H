@@ -23,9 +23,10 @@ struct CanopyTurbulence
     //! ForestDrag.canopy_beta_d: short-circuit dissipation coefficient
     amrex::Real m_beta_d{4.0_rt};
     //! ForestDrag.canopy_length_alpha: KLAxell length scale limit
-    //! l <= alpha L_c; 0.054 = 2 beta^3 of Harman & Finnigan (2007) with
-    //! beta = u*/U_h = 0.3; zero disables the limit
-    amrex::Real m_length_alpha{0.054_rt};
+    //! l <= alpha L_c; Harman & Finnigan (2007) give alpha = 2 beta^3 with
+    //! beta = u*/U_h; 0.04 (beta = 0.27) best fits the Shaw & Schumann (1992)
+    //! LES for LAI 2 and 5; zero disables the limit
+    amrex::Real m_length_alpha{0.04_rt};
 };
 
 //! Read the canopy turbulence inputs from the ForestDrag section

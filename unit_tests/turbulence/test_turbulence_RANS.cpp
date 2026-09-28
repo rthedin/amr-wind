@@ -407,7 +407,7 @@ TEST_F(TurbRANSTest, test_1eqKrans_canopy_length_on)
     auto& mu_free = repo.declare_field("mu_free", 1, 0, 1);
     amrex::MultiFab::Copy(mu_free(0), repo.get_field("mu_turb")(0), 0, 0, 1, 0);
 
-    // Canopy below 100 m: alpha / fd = 2.7 m, below l_s at every height
+    // Canopy below 100 m: alpha / fd = 2 m, below l_s at every height
     const amrex::Real fd = 0.02_rt;
     set_below(forest, fd, 100.0_rt);
     tmodel.update_turbulent_viscosity(
@@ -416,7 +416,7 @@ TEST_F(TurbRANSTest, test_1eqKrans_canopy_length_on)
     const auto& mu = repo.get_field("mu_turb");
     const auto& tlscale = repo.get_field("turb_lscale");
     const amrex::Real Cmu = 0.556_rt;
-    const amrex::Real lcap = 0.054_rt / fd;
+    const amrex::Real lcap = 0.04_rt / fd;
     const amrex::Real mu_cap = rho0 * Cmu * lcap * std::sqrt(tke_val);
     const amrex::Real tol = 10.0_rt * kynema_sgf::constants::TIGHT_TOL;
     for (int k = 0; k < 6; ++k) {

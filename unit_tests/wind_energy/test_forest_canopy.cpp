@@ -83,14 +83,14 @@ protected:
     }
 };
 
-// Defaults: off, beta_p = 1, beta_d = 4, alpha = 0.054
+// Defaults: off, beta_p = 1, beta_d = 4, alpha = 0.04
 TEST_F(ForestCanopyTest, defaults)
 {
     const auto canopy = kynema_sgf::forestdrag::parse_canopy_turbulence();
     EXPECT_FALSE(canopy.m_enabled);
     EXPECT_EQ(canopy.m_beta_p, 1.0_rt);
     EXPECT_EQ(canopy.m_beta_d, 4.0_rt);
-    EXPECT_EQ(canopy.m_length_alpha, 0.054_rt);
+    EXPECT_EQ(canopy.m_length_alpha, 0.04_rt);
 }
 
 TEST_F(ForestCanopyTest, inputs)
@@ -230,11 +230,11 @@ protected:
 TEST_F(ForestCanopyLengthTest, limit_inside_canopy_only)
 {
     const amrex::Real fd = 0.02_rt;
-    const amrex::Real alpha = 0.054_rt;
+    const amrex::Real alpha = 0.04_rt;
     setup_length_fields(fd);
     limit(alpha);
 
-    // alpha / fd = 2.7 m < 10 m in the canopy (z < 4 m)
+    // alpha / fd = 2 m < 10 m in the canopy (z < 4 m)
     const amrex::Real tol = 10.0_rt * kynema_sgf::constants::TIGHT_TOL;
     const amrex::Real lcap = alpha / fd;
     expect_cell(0, lcap, lcap / 10.0_rt, tol);
@@ -244,11 +244,11 @@ TEST_F(ForestCanopyLengthTest, limit_inside_canopy_only)
     expect_cell(7, 10.0_rt, 1.0_rt, 0.0_rt);
 }
 
-// A sparse canopy, alpha / fd = 27 m > 10 m, leaves the length scale
+// A sparse canopy, alpha / fd = 20 m > 10 m, leaves the length scale
 TEST_F(ForestCanopyLengthTest, limit_above_length_scale)
 {
     setup_length_fields(0.002_rt);
-    limit(0.054_rt);
+    limit(0.04_rt);
     expect_cell(0, 10.0_rt, 1.0_rt, 0.0_rt);
     expect_cell(3, 10.0_rt, 1.0_rt, 0.0_rt);
 }
@@ -257,7 +257,7 @@ TEST_F(ForestCanopyLengthTest, limit_above_length_scale)
 TEST_F(ForestCanopyLengthTest, limit_tiny_drag)
 {
     setup_length_fields(1.0e-30_rt);
-    limit(0.054_rt);
+    limit(0.04_rt);
     expect_cell(0, 10.0_rt, 1.0_rt, 0.0_rt);
 }
 
