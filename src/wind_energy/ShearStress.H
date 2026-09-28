@@ -149,7 +149,7 @@ struct ShearStressMoeng
                (wspd_mean * wspd_mean) * utau2;
     };
 
-    AMREX_GPU_DEVICE AMREX_FORCE_INLINE amrex::Real
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE amrex::Real
     calc_theta(amrex::Real wspd, amrex::Real theta) const
     {
         const amrex::Real num1 = (theta - theta_mean) * wspd_mean;
