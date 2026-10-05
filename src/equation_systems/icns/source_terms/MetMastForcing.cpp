@@ -47,7 +47,7 @@ struct StationView
 struct ForcingParams
 {
     amrex::Real inv_rh2;
-    //! Horizontal weight of the mean-mode footprint average
+    //! Horizontal weight of the body-force footprint average
     amrex::Real inv_rh2_avg;
     amrex::Real inv_rz2;
     amrex::Real cutoff;
@@ -277,13 +277,13 @@ void accumulate_footprint(
         });
 }
 
-/** Add the mean-mode body force to the momentum source
+/** Add the body-force body force to the momentum source
  *
  *  The force of each station level is interpolated to the cell with the
  *  station weights; it does not depend on the local velocity.
  */
 template <bool HasTerrain>
-void add_mean_forcing(
+void add_body_force(
     const amrex::Geometry& geom,
     const StationView& st,
     const ForcingParams& prm,
@@ -384,14 +384,14 @@ MetMastForcing::MetMastForcing(const CFDSim& sim)
         m_sigma_factor >= 0.0_rt,
         "MetMastForcing: sigma factor must not be negative");
 
-    std::string forcing_type{"instantaneous"};
+    std::string forcing_type{"relaxation"};
     pp_abl.query("metmast_forcing_type", forcing_type);
-    if (forcing_type == "mean") {
-        m_mean_mode = true;
-    } else if (forcing_type != "instantaneous") {
+    if (forcing_type == "body_force") {
+        m_body_force_mode = true;
+    } else if (forcing_type != "relaxation") {
         amrex::Abort(
-            "MetMastForcing: ABL.metmast_forcing_type must be instantaneous "
-            "or mean");
+            "MetMastForcing: ABL.metmast_forcing_type must be relaxation or "
+            "body_force");
     }
     pp_abl.query("metmast_averaging_time", m_averaging_time);
     m_averaging_radius = m_horizontal_radius;
@@ -411,7 +411,7 @@ MetMastForcing::MetMastForcing(const CFDSim& sim)
         "MetMastForcing: averaging time and radius must be positive");
 
     const int nvals = num_levels() * AMREX_SPACEDIM;
-    m_mean.resize(nvals, 0.0_rt);
+    m_footprint_mean.resize(nvals, 0.0_rt);
     m_second_moment.resize(nvals, 0.0_rt);
     m_integral.resize(nvals, 0.0_rt);
     m_force.resize(nvals, 0.0_rt);
@@ -495,17 +495,20 @@ void MetMastForcing::read_profile_file(const std::string& fname)
     m_level_offset.push_back(static_cast<int>(m_level_z.size()));
 }
 
-amrex::Real MetMastForcing::sigma_velocity(const int ilev, const int n) const
+amrex::Real MetMastForcing::footprint_sigma(const int ilev, const int n) const
 {
     const int idx = (ilev * AMREX_SPACEDIM) + n;
     return std::sqrt(
-        amrex::max(m_second_moment[idx] - (m_mean[idx] * m_mean[idx]), 0.0_rt));
+        amrex::max(
+            m_second_moment[idx] -
+                (m_footprint_mean[idx] * m_footprint_mean[idx]),
+            0.0_rt));
 }
 
-void MetMastForcing::update_mean_forcing(
+void MetMastForcing::update_body_force(
     const metmast::StationView& st, const metmast::ForcingParams& prm) const
 {
-    BL_PROFILE("kynema-sgf::MetMastForcing::update_mean_forcing");
+    BL_PROFILE("kynema-sgf::MetMastForcing::update_body_force");
     if (!m_initialized && !m_restart_state.empty()) {
         read_state(m_restart_state);
     }
@@ -572,13 +575,13 @@ void MetMastForcing::update_mean_forcing(
             const amrex::Real m1 = sums[(l * nsum) + 1 + n] / wsum;
             const amrex::Real m2 =
                 sums[(l * nsum) + 1 + AMREX_SPACEDIM + n] / wsum;
-            m_mean[idx] += alpha * (m1 - m_mean[idx]);
+            m_footprint_mean[idx] += alpha * (m1 - m_footprint_mean[idx]);
             m_second_moment[idx] += alpha * (m2 - m_second_moment[idx]);
             if ((n == AMREX_SPACEDIM - 1) && !m_force_vertical) {
                 m_force[idx] = 0.0_rt;
                 continue;
             }
-            const amrex::Real err = m_level_vel[idx] - m_mean[idx];
+            const amrex::Real err = m_level_vel[idx] - m_footprint_mean[idx];
             if (advance) {
                 m_integral[idx] += err * dt;
             }
@@ -611,7 +614,7 @@ void MetMastForcing::write_output() const
         return;
     }
     const std::string& dir = m_post_dir;
-    const std::string fname = dir + "/metmast_mean.txt";
+    const std::string fname = dir + "/metmast_body_force.txt";
     // A fresh run starts a new file, a restart appends to it
     const bool start = !m_output_started &&
                        (m_restart_state.empty() || !amrex::FileExists(fname));
@@ -637,13 +640,13 @@ void MetMastForcing::write_output() const
                 ofh << " " << m_level_sigma[(l * AMREX_SPACEDIM) + n];
             }
             for (int n = 0; n < AMREX_SPACEDIM; ++n) {
-                ofh << " " << mean_velocity(l, n);
+                ofh << " " << footprint_velocity(l, n);
             }
             for (int n = 0; n < AMREX_SPACEDIM; ++n) {
-                ofh << " " << sigma_velocity(l, n);
+                ofh << " " << footprint_sigma(l, n);
             }
             for (int n = 0; n < AMREX_SPACEDIM; ++n) {
-                ofh << " " << mean_force(l, n);
+                ofh << " " << body_force(l, n);
             }
             ofh << "\n";
         }
@@ -664,7 +667,7 @@ void MetMastForcing::write_state() const
     ofh << std::setprecision(std::numeric_limits<amrex::Real>::max_digits10);
     ofh << num_levels() << "\n";
     for (int idx = 0; idx < num_levels() * AMREX_SPACEDIM; ++idx) {
-        ofh << m_mean[idx] << " " << m_second_moment[idx] << " "
+        ofh << m_footprint_mean[idx] << " " << m_second_moment[idx] << " "
             << m_integral[idx] << "\n";
     }
 }
@@ -682,7 +685,8 @@ void MetMastForcing::read_state(const std::string& fname) const
             " does not match the station levels");
     }
     for (int idx = 0; idx < num_levels() * AMREX_SPACEDIM; ++idx) {
-        if (!(ifh >> m_mean[idx] >> m_second_moment[idx] >> m_integral[idx])) {
+        if (!(ifh >> m_footprint_mean[idx] >> m_second_moment[idx] >>
+              m_integral[idx])) {
             amrex::Abort("MetMastForcing: cannot parse state file " + fname);
         }
     }
@@ -715,22 +719,22 @@ void MetMastForcing::operator()(
     const auto& geom = m_mesh.Geom(lev);
     const auto& repo = m_sim.repo();
 
-    if (m_mean_mode) {
+    if (m_body_force_mode) {
         if (m_time.time_index() != m_last_update_step) {
-            update_mean_forcing(st, prm);
+            update_body_force(st, prm);
             m_last_update_step = m_time.time_index();
         }
         if (repo.field_exists("terrain_height")) {
             AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
                 repo.int_field_exists("terrain_blank"),
                 "MetMastForcing: terrain_height requires terrain_blank");
-            metmast::add_mean_forcing<true>(
+            metmast::add_body_force<true>(
                 geom, st, prm, m_force_d.data(),
                 repo.get_field("terrain_height")(lev).const_arrays(),
                 repo.get_int_field("terrain_blank")(lev).const_arrays(),
                 src_term);
         } else {
-            metmast::add_mean_forcing<false>(
+            metmast::add_body_force<false>(
                 geom, st, prm, m_force_d.data(),
                 amrex::MultiArray4<amrex::Real const>(),
                 amrex::MultiArray4<int const>(), src_term);

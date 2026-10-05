@@ -80,7 +80,7 @@ protected:
         return utils::field_probe(src_term(), 0, i, j, k, n);
     }
 
-    // Mean mode averages the old state, the forcing reads neither
+    // The body-force mode averages the old state, the forcing reads neither
     void set_velocity(const amrex::Vector<amrex::Real>& vel)
     {
         auto& velocity = sim().repo().get_field("velocity");
@@ -95,14 +95,14 @@ protected:
         time.set_current_cfl(2.0_rt, 0.0_rt, 0.0_rt);
     }
 
-    // One lidar gate at the cell (8, 8, 3) center, in mean mode
+    // One lidar gate at the cell (8, 8, 3) center, in body-force mode
     static void setup_mean_gate(const std::string& fname)
     {
         write_file(fname, "425 425\n87.5 7 2 0 1 1 1\n");
         amrex::ParmParse pp("ABL");
         amrex::Vector<std::string> files{fname};
         pp.addarr("metmast_profile_files", files);
-        pp.add("metmast_forcing_type", std::string("mean"));
+        pp.add("metmast_forcing_type", std::string("body_force"));
         pp.add("metmast_output_frequency", 0);
     }
 
@@ -287,7 +287,7 @@ TEST_F(MetMastTest, rate_limit)
         probe(8, 8, 4, 0), (10.0_rt - 5.0_rt) / 0.1_rt, 1.0e2_rt * m_tol);
 }
 
-TEST_F(MetMastTest, mean_controller)
+TEST_F(MetMastTest, body_force_controller)
 {
     setup_mean_gate("lidar_mean.txt");
     {
@@ -300,16 +300,16 @@ TEST_F(MetMastTest, mean_controller)
 
     // First update: the filter starts from the footprint mean, no integral
     evaluate(forcing);
-    EXPECT_NEAR(forcing.mean_velocity(0, 0), 5.0_rt, m_tol);
-    EXPECT_NEAR(forcing.mean_velocity(0, 2), 0.3_rt, m_tol);
-    EXPECT_NEAR(forcing.sigma_velocity(0, 0), 0.0_rt, 1.0e2_rt * m_tol);
-    EXPECT_NEAR(forcing.mean_force(0, 0), 2.0_rt / m_tau, m_tol);
-    EXPECT_NEAR(forcing.mean_force(0, 1), 1.0_rt / m_tau, m_tol);
+    EXPECT_NEAR(forcing.footprint_velocity(0, 0), 5.0_rt, m_tol);
+    EXPECT_NEAR(forcing.footprint_velocity(0, 2), 0.3_rt, m_tol);
+    EXPECT_NEAR(forcing.footprint_sigma(0, 0), 0.0_rt, 1.0e2_rt * m_tol);
+    EXPECT_NEAR(forcing.body_force(0, 0), 2.0_rt / m_tau, m_tol);
+    EXPECT_NEAR(forcing.body_force(0, 1), 1.0_rt / m_tau, m_tol);
     // No vertical forcing by default
-    EXPECT_NEAR(forcing.mean_force(0, 2), 0.0_rt, m_tol);
+    EXPECT_NEAR(forcing.body_force(0, 2), 0.0_rt, m_tol);
     EXPECT_NEAR(probe(8, 8, 3, 0), 2.0_rt / m_tau, m_tol);
     EXPECT_NEAR(probe(8, 8, 3, 2), 0.0_rt, m_tol);
-    EXPECT_TRUE(amrex::FileExists("post_processing/metmast_mean.txt"));
+    EXPECT_TRUE(amrex::FileExists("post_processing/metmast_body_force.txt"));
 
     // Second step: filtered mean, filtered second moment and the integral
     next_step();
@@ -320,19 +320,19 @@ TEST_F(MetMastTest, mean_controller)
     const amrex::Real mean = 5.0_rt + alpha;
     const amrex::Real second = 25.0_rt + (alpha * 11.0_rt);
     const amrex::Real err = 7.0_rt - mean;
-    EXPECT_NEAR(forcing.mean_velocity(0, 0), mean, m_tol);
+    EXPECT_NEAR(forcing.footprint_velocity(0, 0), mean, m_tol);
     EXPECT_NEAR(
-        forcing.sigma_velocity(0, 0), std::sqrt(second - (mean * mean)),
+        forcing.footprint_sigma(0, 0), std::sqrt(second - (mean * mean)),
         1.0e2_rt * m_tol);
     const amrex::Real force = (err / m_tau) + (err * dt / (4.0_rt * m_tau));
-    EXPECT_NEAR(forcing.mean_force(0, 0), force, m_tol);
+    EXPECT_NEAR(forcing.body_force(0, 0), force, m_tol);
     EXPECT_NEAR(probe(8, 8, 3, 0), force, m_tol);
     // Off the gate the force is spread with the station weights
     EXPECT_NEAR(
         probe(10, 8, 3, 0), force * std::exp(-0.25_rt * 0.04_rt), m_tol);
 }
 
-TEST_F(MetMastTest, mean_independent_of_local_velocity)
+TEST_F(MetMastTest, body_force_independent_of_local_velocity)
 {
     setup_mean_gate("lidar_local.txt");
     setup_sim();
@@ -353,7 +353,7 @@ TEST_F(MetMastTest, mean_independent_of_local_velocity)
     EXPECT_NEAR(before, 2.0_rt / m_tau, m_tol);
 }
 
-TEST_F(MetMastTest, mean_vertical)
+TEST_F(MetMastTest, body_force_vertical)
 {
     setup_mean_gate("lidar_vertical.txt");
     {
@@ -368,11 +368,11 @@ TEST_F(MetMastTest, mean_vertical)
     next_step();
     evaluate(forcing);
     // Vertical forced, and no integral term after a step
-    EXPECT_NEAR(forcing.mean_force(0, 2), -0.3_rt / m_tau, m_tol);
-    EXPECT_NEAR(forcing.mean_force(0, 0), 2.0_rt / m_tau, m_tol);
+    EXPECT_NEAR(forcing.body_force(0, 2), -0.3_rt / m_tau, m_tol);
+    EXPECT_NEAR(forcing.body_force(0, 0), 2.0_rt / m_tau, m_tol);
 }
 
-TEST_F(MetMastTest, mean_max_force)
+TEST_F(MetMastTest, body_force_max_force)
 {
     setup_mean_gate("lidar_max_force.txt");
     {
@@ -388,7 +388,7 @@ TEST_F(MetMastTest, mean_max_force)
     next_step();
     evaluate(forcing);
     // The force is capped
-    EXPECT_NEAR(forcing.mean_force(0, 0), 0.01_rt, m_tol);
+    EXPECT_NEAR(forcing.body_force(0, 0), 0.01_rt, m_tol);
     EXPECT_NEAR(probe(8, 8, 3, 0), 0.01_rt, m_tol);
 
     // The integral did not wind up while saturated: at the target only the
@@ -396,11 +396,11 @@ TEST_F(MetMastTest, mean_max_force)
     next_step();
     set_velocity({7.0_rt, 2.0_rt, 0.0_rt});
     evaluate(forcing);
-    EXPECT_NEAR(forcing.mean_force(0, 0), 0.0_rt, m_tol);
-    EXPECT_NEAR(forcing.mean_force(0, 1), 0.0_rt, m_tol);
+    EXPECT_NEAR(forcing.body_force(0, 0), 0.0_rt, m_tol);
+    EXPECT_NEAR(forcing.body_force(0, 1), 0.0_rt, m_tol);
 }
 
-TEST_F(MetMastTest, mean_averaging_radius)
+TEST_F(MetMastTest, body_force_averaging_radius)
 {
     setup_mean_gate("lidar_avg_radius.txt");
     {
@@ -417,21 +417,21 @@ TEST_F(MetMastTest, mean_averaging_radius)
     evaluate(forcing);
 
     // The small average sees the lidar column only; the force keeps R_h
-    EXPECT_NEAR(forcing.mean_velocity(0, 0), 9.0_rt, m_tol);
-    EXPECT_NEAR(forcing.mean_force(0, 0), -2.0_rt / m_tau, m_tol);
+    EXPECT_NEAR(forcing.footprint_velocity(0, 0), 9.0_rt, m_tol);
+    EXPECT_NEAR(forcing.body_force(0, 0), -2.0_rt / m_tau, m_tol);
     EXPECT_NEAR(
         probe(10, 8, 3, 0), -2.0_rt / m_tau * std::exp(-0.25_rt * 0.04_rt),
         m_tol);
 }
 
-TEST_F(MetMastTest, mean_terrain)
+TEST_F(MetMastTest, body_force_terrain)
 {
     write_file("lidar_mean_terrain.txt", "425 425\n62.5 7 0 0 1 1 1\n");
     {
         amrex::ParmParse pp("ABL");
         amrex::Vector<std::string> files{"lidar_mean_terrain.txt"};
         pp.addarr("metmast_profile_files", files);
-        pp.add("metmast_forcing_type", std::string("mean"));
+        pp.add("metmast_forcing_type", std::string("body_force"));
         pp.add("metmast_output_frequency", 0);
     }
     setup_sim();
@@ -453,7 +453,7 @@ TEST_F(MetMastTest, mean_terrain)
     evaluate(forcing);
 
     // The footprint average skips the terrain cells
-    EXPECT_NEAR(forcing.mean_velocity(0, 0), 5.0_rt, m_tol);
+    EXPECT_NEAR(forcing.footprint_velocity(0, 0), 5.0_rt, m_tol);
     // The gate is 62.5 m above the terrain
     EXPECT_NEAR(probe(8, 8, 6, 0), 2.0_rt / m_tau, m_tol);
     for (int k = 0; k < 4; ++k) {
@@ -461,7 +461,7 @@ TEST_F(MetMastTest, mean_terrain)
     }
 }
 
-TEST_F(MetMastTest, mean_restart_state)
+TEST_F(MetMastTest, body_force_restart_state)
 {
     write_file(
         "metmast_state_test.txt",
@@ -485,9 +485,9 @@ TEST_F(MetMastTest, mean_restart_state)
     const amrex::Real alpha = dt / 120.0_rt;
     const amrex::Real mean = 6.0_rt - alpha;
     const amrex::Real err = 7.0_rt - mean;
-    EXPECT_NEAR(forcing.mean_velocity(0, 0), mean, m_tol);
+    EXPECT_NEAR(forcing.footprint_velocity(0, 0), mean, m_tol);
     EXPECT_NEAR(
-        forcing.mean_force(0, 0),
+        forcing.body_force(0, 0),
         (err / m_tau) + ((10.0_rt + (err * dt)) / (4.0_rt * m_tau)), m_tol);
 }
 

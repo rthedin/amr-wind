@@ -33,7 +33,7 @@ incflo.physics = FreeStream
 ICNS.source_terms = MetMastForcing
 
 ABL.metmast_profile_files = "lidar.txt"
-ABL.metmast_forcing_type = mean
+ABL.metmast_forcing_type = body_force
 ABL.metmast_timescale = 20.0
 ABL.metmast_averaging_time = 20.0
 ABL.metmast_integral_timescale = 80.0
