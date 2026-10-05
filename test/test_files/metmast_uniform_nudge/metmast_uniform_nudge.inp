@@ -1,0 +1,65 @@
+#¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨#
+#            SIMULATION STOP            #
+#.......................................#
+time.stop_time               =   -100.0     # Max (simulated) time to evolve
+time.max_step                =   10         # Max number of time steps
+
+#¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨#
+#         TIME STEP COMPUTATION         #
+#.......................................#
+time.fixed_dt         =   -1        # Use this constant dt if > 0
+time.cfl              =   0.5       # CFL factor
+
+#¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨#
+#            INPUT AND OUTPUT           #
+#.......................................#
+time.plot_interval            =  10       # Steps between plot files
+time.checkpoint_interval      =  -1       # Steps between checkpoint files
+
+#¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨#
+#               PHYSICS                 #
+#.......................................#
+# Uniform 8 m/s inflow nudged to 15 m/s over a lidar column
+ConstValue.density.value = 1.0
+ConstValue.velocity.value = 8.0 0.0 0.0
+
+incflo.use_godunov = 1
+incflo.diffusion_type = 2
+incflo.do_initial_proj = 1
+incflo.initial_iterations = 0
+transport.viscosity = 1.0e-5
+turbulence.model = Laminar
+incflo.physics = FreeStream
+ICNS.source_terms = MetMastForcing
+
+ABL.metmast_profile_files = "lidar.txt"
+ABL.metmast_forcing_type = mean
+ABL.metmast_timescale = 20.0
+ABL.metmast_averaging_time = 20.0
+ABL.metmast_integral_timescale = 80.0
+ABL.metmast_horizontal_radius = 100.0
+ABL.metmast_vertical_radius = 50.0
+ABL.metmast_output_frequency = 5
+
+#¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨#
+#        ADAPTIVE MESH REFINEMENT       #
+#.......................................#
+amr.n_cell              = 64 64 16    # Grid cells at coarsest AMRlevel
+amr.max_level           = 0           # Max AMR level in hierarchy
+
+#¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨#
+#              GEOMETRY                 #
+#.......................................#
+geometry.prob_lo        =   0    0    0
+geometry.prob_hi        =   2000 2000 500
+geometry.is_periodic    =   0   1   0   # Periodicity x y z (0/1)
+
+# Boundary conditions
+xlo.type = "mass_inflow"
+xlo.density = 1.0
+xlo.velocity = 8.0 0.0 0.0
+xhi.type = "pressure_outflow"
+zlo.type = "slip_wall"
+zhi.type = "slip_wall"
+
+incflo.verbose          =   0          # incflo_level

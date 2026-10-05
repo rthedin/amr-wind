@@ -404,7 +404,103 @@ cells inside the terrain are not forced.
 
    Half-width :math:`\alpha` of the tolerance band in standard deviations. A
    value of 0 relaxes the velocity to the measured mean. Met-mast points have
-   no standard deviation and are always relaxed to the mean.
+   no standard deviation and are always relaxed to the mean. Only used by the
+   instantaneous forcing.
+
+.. input_param:: ABL.metmast_forcing_type
+
+   **type:** String, optional, default = instantaneous
+
+   ``instantaneous`` relaxes the local velocity as described above. In LES this
+   also damps the resolved turbulence at the rate :math:`2k/\tau`, which is
+   larger than the shear production for the time scales that hold the mean.
+   ``mean`` compares the measurements with the model's footprint average
+   instead, like a virtual lidar, and applies the difference as a body force
+   that does not depend on the local velocity. For every level :math:`l` of
+   every station :math:`i`, the velocity is averaged over the station weights
+   (with the horizontal radius :input_param:`ABL.metmast_averaging_radius`) and
+   filtered in time,
+
+   .. math::
+
+      \bar{U}_{il} \leftarrow \bar{U}_{il} + \frac{\Delta t}{T_{avg}}
+      \left(\frac{\sum w_{il} u \Delta V}{\sum w_{il} \Delta V} -
+      \bar{U}_{il}\right)
+
+   and a proportional-integral controller gives the force
+
+   .. math::
+
+      F_{il} = \frac{e_{il}}{\tau} + \frac{1}{\tau_I}\int e_{il}\,dt, \qquad
+      e_{il} = \bar{u}_{il} - \bar{U}_{il}
+
+   which is spread to the cells with the station weights,
+   :math:`S = \sum_i w_i F_i / \max(1, \sum_i w_i)`. Cells covered by a finer
+   AMR level and cells inside the terrain are left out of the average. The
+   averaging and the controller are updated once per time step.
+
+   A body force cannot add mass flux: the projection keeps the flow
+   divergence-free, so a faster stream through the footprint is balanced by
+   slower flow around it, and the accelerated stream continues downstream of
+   the footprint. Large differences between the measurements and the
+   unforced flow therefore give unrealistic flow around the station; such
+   differences should be corrected through the inflow or the large-scale
+   forcing instead.
+
+.. input_param:: ABL.metmast_averaging_time
+
+   **type:** Real, optional, default = 120.0
+
+   Time filter :math:`T_{avg}` of the footprint averages in seconds, for
+   example the lidar averaging period or the time to cross the footprint.
+
+.. input_param:: ABL.metmast_averaging_radius
+
+   **type:** Real, optional, default = :input_param:`ABL.metmast_horizontal_radius`
+
+   Horizontal radius of the footprint average. A radius matching the lidar
+   measurement volume makes the controller hold the velocity at the lidar
+   while the force is still spread over
+   :input_param:`ABL.metmast_horizontal_radius`.
+
+.. input_param:: ABL.metmast_integral_timescale
+
+   **type:** Real, optional, default = 4 :input_param:`ABL.metmast_timescale`
+
+   Integral time scale :math:`\tau_I` in seconds. Zero or a negative value
+   turns the integral term off.
+
+.. input_param:: ABL.metmast_max_force
+
+   **type:** Real, optional, default = 0.0
+
+   Largest force per component in :math:`m/s^2`. The integral stops
+   accumulating while the force is capped. Zero or a negative value means no
+   cap.
+
+.. input_param:: ABL.metmast_force_vertical
+
+   **type:** Boolean, optional, default = false
+
+   Also force the vertical velocity in the mean forcing.
+
+.. input_param:: ABL.metmast_output_frequency
+
+   **type:** Integer, optional, default = 10
+
+   Steps between outputs of the mean forcing to
+   ``post_processing/metmast_mean.txt``: per station level the measured
+   velocity and standard deviation, the footprint average and standard
+   deviation, and the force. The footprint standard deviation includes the
+   spatial variation within the footprint. Zero turns the output off.
+
+.. input_param:: ABL.metmast_restart_state
+
+   **type:** String, optional
+
+   Controller state to continue from on a restart. The state is written to
+   ``post_processing/metmast_state<step>.txt`` at every checkpoint step; give
+   the file of the checkpoint being restarted.
 
 
 The following arguments are influential when ``GravityForcing`` is included in :input_param:`ICNS.source_terms`.

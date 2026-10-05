@@ -80,6 +80,32 @@ protected:
         return utils::field_probe(src_term(), 0, i, j, k, n);
     }
 
+    // Mean mode averages the old state, the forcing reads neither
+    void set_velocity(const amrex::Vector<amrex::Real>& vel)
+    {
+        auto& velocity = sim().repo().get_field("velocity");
+        velocity.setVal(vel);
+        velocity.state(kynema_sgf::FieldState::Old).setVal(vel);
+    }
+
+    void next_step()
+    {
+        auto& time = sim().time();
+        time.new_timestep();
+        time.set_current_cfl(2.0_rt, 0.0_rt, 0.0_rt);
+    }
+
+    // One lidar gate at the cell (8, 8, 3) center, in mean mode
+    static void setup_mean_gate(const std::string& fname)
+    {
+        write_file(fname, "425 425\n87.5 7 2 0 1 1 1\n");
+        amrex::ParmParse pp("ABL");
+        amrex::Vector<std::string> files{fname};
+        pp.addarr("metmast_profile_files", files);
+        pp.add("metmast_forcing_type", std::string("mean"));
+        pp.add("metmast_output_frequency", 0);
+    }
+
     const amrex::Vector<amrex::Real> m_vel{5.0_rt, 0.0_rt, 0.0_rt};
     const amrex::Real m_tau{30.0_rt};
     const amrex::Real m_tol{
@@ -259,6 +285,210 @@ TEST_F(MetMastTest, rate_limit)
     // tau < dt: the rate is limited to 1/dt
     EXPECT_NEAR(
         probe(8, 8, 4, 0), (10.0_rt - 5.0_rt) / 0.1_rt, 1.0e2_rt * m_tol);
+}
+
+TEST_F(MetMastTest, mean_controller)
+{
+    setup_mean_gate("lidar_mean.txt");
+    {
+        amrex::ParmParse pp("ABL");
+        pp.add("metmast_output_frequency", 1);
+    }
+    setup_sim();
+    set_velocity({5.0_rt, 1.0_rt, 0.3_rt});
+    kynema_sgf::pde::icns::MetMastForcing forcing(sim());
+
+    // First update: the filter starts from the footprint mean, no integral
+    evaluate(forcing);
+    EXPECT_NEAR(forcing.mean_velocity(0, 0), 5.0_rt, m_tol);
+    EXPECT_NEAR(forcing.mean_velocity(0, 2), 0.3_rt, m_tol);
+    EXPECT_NEAR(forcing.sigma_velocity(0, 0), 0.0_rt, 1.0e2_rt * m_tol);
+    EXPECT_NEAR(forcing.mean_force(0, 0), 2.0_rt / m_tau, m_tol);
+    EXPECT_NEAR(forcing.mean_force(0, 1), 1.0_rt / m_tau, m_tol);
+    // No vertical forcing by default
+    EXPECT_NEAR(forcing.mean_force(0, 2), 0.0_rt, m_tol);
+    EXPECT_NEAR(probe(8, 8, 3, 0), 2.0_rt / m_tau, m_tol);
+    EXPECT_NEAR(probe(8, 8, 3, 2), 0.0_rt, m_tol);
+    EXPECT_TRUE(amrex::FileExists("post_processing/metmast_mean.txt"));
+
+    // Second step: filtered mean, filtered second moment and the integral
+    next_step();
+    const amrex::Real dt = sim().time().delta_t();
+    set_velocity({6.0_rt, 1.0_rt, 0.3_rt});
+    evaluate(forcing);
+    const amrex::Real alpha = dt / 120.0_rt;
+    const amrex::Real mean = 5.0_rt + alpha;
+    const amrex::Real second = 25.0_rt + (alpha * 11.0_rt);
+    const amrex::Real err = 7.0_rt - mean;
+    EXPECT_NEAR(forcing.mean_velocity(0, 0), mean, m_tol);
+    EXPECT_NEAR(
+        forcing.sigma_velocity(0, 0), std::sqrt(second - (mean * mean)),
+        1.0e2_rt * m_tol);
+    const amrex::Real force = (err / m_tau) + (err * dt / (4.0_rt * m_tau));
+    EXPECT_NEAR(forcing.mean_force(0, 0), force, m_tol);
+    EXPECT_NEAR(probe(8, 8, 3, 0), force, m_tol);
+    // Off the gate the force is spread with the station weights
+    EXPECT_NEAR(
+        probe(10, 8, 3, 0), force * std::exp(-0.25_rt * 0.04_rt), m_tol);
+}
+
+TEST_F(MetMastTest, mean_independent_of_local_velocity)
+{
+    setup_mean_gate("lidar_local.txt");
+    setup_sim();
+    set_velocity({5.0_rt, 0.0_rt, 0.0_rt});
+    kynema_sgf::pde::icns::MetMastForcing forcing(sim());
+    evaluate(forcing);
+    const amrex::Real before = probe(8, 8, 3, 0);
+
+    // A local gust in the same step does not change the force: the footprint
+    // is averaged once per step and the force ignores the local velocity
+    const amrex::Box gust(amrex::IntVect(7, 7, 2), amrex::IntVect(9, 9, 4));
+    auto& velocity = sim().repo().get_field("velocity");
+    velocity(0).setVal(50.0_rt, gust, 0, AMREX_SPACEDIM);
+    velocity.state(kynema_sgf::FieldState::Old)(0).setVal(
+        50.0_rt, gust, 0, AMREX_SPACEDIM);
+    evaluate(forcing);
+    EXPECT_NEAR(probe(8, 8, 3, 0), before, m_tol);
+    EXPECT_NEAR(before, 2.0_rt / m_tau, m_tol);
+}
+
+TEST_F(MetMastTest, mean_vertical)
+{
+    setup_mean_gate("lidar_vertical.txt");
+    {
+        amrex::ParmParse pp("ABL");
+        pp.add("metmast_force_vertical", true);
+        pp.add("metmast_integral_timescale", 0.0_rt);
+    }
+    setup_sim();
+    set_velocity({5.0_rt, 0.0_rt, 0.3_rt});
+    kynema_sgf::pde::icns::MetMastForcing forcing(sim());
+    evaluate(forcing);
+    next_step();
+    evaluate(forcing);
+    // Vertical forced, and no integral term after a step
+    EXPECT_NEAR(forcing.mean_force(0, 2), -0.3_rt / m_tau, m_tol);
+    EXPECT_NEAR(forcing.mean_force(0, 0), 2.0_rt / m_tau, m_tol);
+}
+
+TEST_F(MetMastTest, mean_max_force)
+{
+    setup_mean_gate("lidar_max_force.txt");
+    {
+        amrex::ParmParse pp("ABL");
+        pp.add("metmast_max_force", 0.01_rt);
+        // No time filter, so the mean follows the velocity immediately
+        pp.add("metmast_averaging_time", 1.0e-3_rt);
+    }
+    setup_sim();
+    set_velocity({5.0_rt, 0.0_rt, 0.0_rt});
+    kynema_sgf::pde::icns::MetMastForcing forcing(sim());
+    evaluate(forcing);
+    next_step();
+    evaluate(forcing);
+    // The force is capped
+    EXPECT_NEAR(forcing.mean_force(0, 0), 0.01_rt, m_tol);
+    EXPECT_NEAR(probe(8, 8, 3, 0), 0.01_rt, m_tol);
+
+    // The integral did not wind up while saturated: at the target only the
+    // proportional part is left, and it is zero
+    next_step();
+    set_velocity({7.0_rt, 2.0_rt, 0.0_rt});
+    evaluate(forcing);
+    EXPECT_NEAR(forcing.mean_force(0, 0), 0.0_rt, m_tol);
+    EXPECT_NEAR(forcing.mean_force(0, 1), 0.0_rt, m_tol);
+}
+
+TEST_F(MetMastTest, mean_averaging_radius)
+{
+    setup_mean_gate("lidar_avg_radius.txt");
+    {
+        amrex::ParmParse pp("ABL");
+        pp.add("metmast_averaging_radius", 1.0_rt);
+    }
+    setup_sim();
+    set_velocity({5.0_rt, 0.0_rt, 0.0_rt});
+    // Faster column through the lidar only
+    const amrex::Box column(amrex::IntVect(8, 8, 0), amrex::IntVect(8, 8, 15));
+    auto& velocity = sim().repo().get_field("velocity");
+    velocity.state(kynema_sgf::FieldState::Old)(0).setVal(9.0_rt, column, 0, 1);
+    kynema_sgf::pde::icns::MetMastForcing forcing(sim());
+    evaluate(forcing);
+
+    // The small average sees the lidar column only; the force keeps R_h
+    EXPECT_NEAR(forcing.mean_velocity(0, 0), 9.0_rt, m_tol);
+    EXPECT_NEAR(forcing.mean_force(0, 0), -2.0_rt / m_tau, m_tol);
+    EXPECT_NEAR(
+        probe(10, 8, 3, 0), -2.0_rt / m_tau * std::exp(-0.25_rt * 0.04_rt),
+        m_tol);
+}
+
+TEST_F(MetMastTest, mean_terrain)
+{
+    write_file("lidar_mean_terrain.txt", "425 425\n62.5 7 0 0 1 1 1\n");
+    {
+        amrex::ParmParse pp("ABL");
+        amrex::Vector<std::string> files{"lidar_mean_terrain.txt"};
+        pp.addarr("metmast_profile_files", files);
+        pp.add("metmast_forcing_type", std::string("mean"));
+        pp.add("metmast_output_frequency", 0);
+    }
+    setup_sim();
+    set_velocity({5.0_rt, 0.0_rt, 0.0_rt});
+    // Flat terrain 100 m high with a wrong velocity inside it
+    auto& terrain_height = sim().repo().declare_field("terrain_height", 1, 1);
+    auto& terrain_blank = sim().repo().declare_int_field("terrain_blank", 1, 1);
+    terrain_height.setVal(100.0_rt);
+    terrain_blank.setVal(0);
+    const amrex::Box inside(amrex::IntVect(0, 0, 0), amrex::IntVect(15, 15, 3));
+    terrain_blank(0).setVal(1, inside, 1);
+    sim()
+        .repo()
+        .get_field("velocity")
+        .state(kynema_sgf::FieldState::Old)(0)
+        .setVal(100.0_rt, inside, 0, AMREX_SPACEDIM);
+
+    kynema_sgf::pde::icns::MetMastForcing forcing(sim());
+    evaluate(forcing);
+
+    // The footprint average skips the terrain cells
+    EXPECT_NEAR(forcing.mean_velocity(0, 0), 5.0_rt, m_tol);
+    // The gate is 62.5 m above the terrain
+    EXPECT_NEAR(probe(8, 8, 6, 0), 2.0_rt / m_tau, m_tol);
+    for (int k = 0; k < 4; ++k) {
+        EXPECT_NEAR(probe(8, 8, k, 0), 0.0_rt, m_tol);
+    }
+}
+
+TEST_F(MetMastTest, mean_restart_state)
+{
+    write_file(
+        "metmast_state_test.txt",
+        "1\n"
+        "6 37 10\n"
+        "1 2 0\n"
+        "0 0 0\n");
+    setup_mean_gate("lidar_restart.txt");
+    {
+        amrex::ParmParse pp("ABL");
+        pp.add("metmast_restart_state", std::string("metmast_state_test.txt"));
+    }
+    setup_sim();
+    set_velocity({5.0_rt, 0.0_rt, 0.0_rt});
+    next_step();
+    const amrex::Real dt = sim().time().delta_t();
+    kynema_sgf::pde::icns::MetMastForcing forcing(sim());
+    evaluate(forcing);
+
+    // The filter and the integral continue from the saved state
+    const amrex::Real alpha = dt / 120.0_rt;
+    const amrex::Real mean = 6.0_rt - alpha;
+    const amrex::Real err = 7.0_rt - mean;
+    EXPECT_NEAR(forcing.mean_velocity(0, 0), mean, m_tol);
+    EXPECT_NEAR(
+        forcing.mean_force(0, 0),
+        (err / m_tau) + ((10.0_rt + (err * dt)) / (4.0_rt * m_tau)), m_tol);
 }
 
 } // namespace kynema_sgf_tests
