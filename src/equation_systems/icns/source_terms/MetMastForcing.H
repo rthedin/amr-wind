@@ -7,6 +7,11 @@
 
 namespace kynema_sgf::pde::icns {
 
+namespace metmast {
+struct StationView;
+struct ForcingParams;
+} // namespace metmast
+
 /** Relax the velocity towards met-mast and lidar measurements
  *  \ingroup icns_src
  *
@@ -35,6 +40,29 @@ namespace kynema_sgf::pde::icns {
  *
  *  The heights are above the local terrain when TerrainDrag is active, and no
  *  forcing is applied in the cells inside the terrain.
+ *
+ *  The relaxation above acts on the instantaneous velocity, so in LES it also
+ *  damps the resolved turbulence. With `ABL.metmast_forcing_type = mean`, the
+ *  forcing instead acts on the model's footprint average, as a virtual lidar.
+ *  Each step, the velocity is averaged over the weights \f$w_i\f$ of every
+ *  level \f$l\f$ of every station, with the horizontal radius
+ *  `ABL.metmast_averaging_radius` (default \f$R_h\f$) to match the lidar
+ *  measurement volume, and filtered in time over \f$T_{avg}\f$:
+ *
+ *  \f[ \bar{U}_{il} \leftarrow \bar{U}_{il} + \frac{\Delta t}{T_{avg}}
+ *  \left(\frac{\sum w_{il} u \Delta V}{\sum w_{il} \Delta V} -
+ *  \bar{U}_{il}\right) \f]
+ *
+ *  A proportional-integral controller turns the error \f$e_{il} =
+ *  \bar{u}_{il} - \bar{U}_{il}\f$ into a body force
+ *
+ *  \f[ F_{il} = \frac{e_{il}}{\tau} + \frac{1}{\tau_I} \int e_{il}\,dt \f]
+ *
+ *  which is interpolated to the cells with the same weights:
+ *  \f$S = \sum_i w_i F_i / \max(1, \sum_i w_i)\f$. The force does not depend
+ *  on the local velocity, so it shifts the mean without damping the
+ *  fluctuations. The vertical component is only forced with
+ *  `ABL.metmast_force_vertical = true`.
  */
 class MetMastForcing : public MomentumSource::Register<MetMastForcing>
 {
@@ -54,7 +82,42 @@ public:
         return static_cast<int>(m_station_x.size());
     }
 
+    //! Total number of levels over all stations
+    [[nodiscard]] int num_levels() const
+    {
+        return static_cast<int>(m_level_z.size());
+    }
+
+    //! Mean-mode filtered footprint velocity of a level (global index)
+    [[nodiscard]] amrex::Real mean_velocity(int ilev, int n) const
+    {
+        return m_mean[(ilev * AMREX_SPACEDIM) + n];
+    }
+
+    //! Mean-mode footprint standard deviation of a level (global index)
+    [[nodiscard]] amrex::Real sigma_velocity(int ilev, int n) const;
+
+    //! Mean-mode body force of a level (global index)
+    [[nodiscard]] amrex::Real mean_force(int ilev, int n) const
+    {
+        return m_force[(ilev * AMREX_SPACEDIM) + n];
+    }
+
 private:
+    //! Average the velocity over the footprints and update the controller
+    void update_mean_forcing(
+        const metmast::StationView& st,
+        const metmast::ForcingParams& prm) const;
+
+    //! Write the footprint averages and forces to the output file
+    void write_output() const;
+
+    //! Write the controller state for a restart
+    void write_state() const;
+
+    //! Read the controller state written by write_state
+    void read_state(const std::string& fname) const;
+
     //! Read met-mast points, one per line: x y z u v w T
     void read_point_file(const std::string& fname);
 
@@ -99,6 +162,36 @@ private:
     amrex::Real m_damping_radius{1400};
     //! Half-width of the tolerance band in standard deviations
     amrex::Real m_sigma_factor{1};
+
+    //! Force the footprint mean (true) or the instantaneous velocity (false)
+    bool m_mean_mode{false};
+    //! Time filter of the footprint averages
+    amrex::Real m_averaging_time{120};
+    //! Horizontal radius of the footprint average (default: forcing radius)
+    amrex::Real m_averaging_radius{500};
+    //! Integral time scale of the controller (0 or negative: no integral)
+    amrex::Real m_integral_timescale{-1};
+    //! Also force the vertical velocity in mean mode
+    bool m_force_vertical{false};
+    //! Largest body force per component in mean mode (0 or negative: none)
+    amrex::Real m_max_force{0};
+    //! Steps between outputs of the footprint averages (0: no output)
+    int m_output_frequency{10};
+    //! Controller state to read on the first update of a restart
+    std::string m_restart_state;
+    //! Output directory, the same as the sampling output
+    std::string m_post_dir{"post_processing"};
+
+    //! Mean-mode state, AMREX_SPACEDIM values per level
+    mutable amrex::Vector<amrex::Real> m_mean;
+    mutable amrex::Vector<amrex::Real> m_second_moment;
+    mutable amrex::Vector<amrex::Real> m_integral;
+    mutable amrex::Vector<amrex::Real> m_force;
+    mutable amrex::Gpu::DeviceVector<amrex::Real> m_force_d;
+    mutable amrex::Gpu::DeviceVector<amrex::Real> m_sums_d;
+    mutable bool m_initialized{false};
+    mutable int m_last_update_step{-1};
+    mutable bool m_output_started{false};
 };
 
 } // namespace kynema_sgf::pde::icns
