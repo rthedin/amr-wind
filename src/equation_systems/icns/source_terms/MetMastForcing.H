@@ -63,6 +63,12 @@ struct ForcingParams;
  *  on the local velocity, so it shifts the mean without damping the
  *  fluctuations. The vertical component is only forced with
  *  `ABL.metmast_force_vertical = true`.
+ *
+ *  With `ABL.metmast_gate_length`, each gate averages only the cells within
+ *  half the gate length of its height, like a lidar range gate, instead of the
+ *  forcing weights and their taper beyond the end gates.
+ *  `ABL.metmast_forcing_type = monitor` computes and writes the footprint
+ *  averages without applying any force.
  */
 class MetMastForcing : public MomentumSource::Register<MetMastForcing>
 {
@@ -169,6 +175,10 @@ private:
     amrex::Real m_averaging_time{120};
     //! Horizontal radius of the footprint average (default: forcing radius)
     amrex::Real m_averaging_radius{500};
+    //! Range-gate length of the footprint average (0: forcing weights)
+    amrex::Real m_gate_length{0};
+    //! Compute and write the footprint averages without forcing
+    bool m_monitor_only{false};
     //! Integral time scale of the controller (0 or negative: no integral)
     amrex::Real m_integral_timescale{-1};
     //! Also force the vertical velocity in body-force mode

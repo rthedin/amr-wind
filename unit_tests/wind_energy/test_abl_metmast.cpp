@@ -424,6 +424,59 @@ TEST_F(MetMastTest, body_force_averaging_radius)
         m_tol);
 }
 
+TEST_F(MetMastTest, body_force_gate_length)
+{
+    setup_mean_gate("lidar_gate_length.txt");
+    setup_sim();
+    // Faster layer in the gate's own cells (k = 3, z = 87.5 m)
+    set_velocity({5.0_rt, 0.0_rt, 0.0_rt});
+    const amrex::Box layer(amrex::IntVect(0, 0, 3), amrex::IntVect(15, 15, 3));
+    sim()
+        .repo()
+        .get_field("velocity")
+        .state(kynema_sgf::FieldState::Old)(0)
+        .setVal(9.0_rt, layer, 0, 1);
+
+    // Default: the vertical forcing weights also average the layers around
+    {
+        kynema_sgf::pde::icns::MetMastForcing forcing(sim());
+        evaluate(forcing);
+        EXPECT_LT(forcing.footprint_velocity(0, 0), 8.0_rt);
+    }
+    // A 40 m range gate on 25 m cells averages the gate's own layer only;
+    // the next layers are 25 m away
+    {
+        amrex::ParmParse pp("ABL");
+        pp.add("metmast_gate_length", 40.0_rt);
+        kynema_sgf::pde::icns::MetMastForcing forcing(sim());
+        evaluate(forcing);
+        EXPECT_NEAR(forcing.footprint_velocity(0, 0), 9.0_rt, m_tol);
+        EXPECT_NEAR(forcing.body_force(0, 0), -2.0_rt / m_tau, m_tol);
+    }
+}
+
+TEST_F(MetMastTest, body_force_monitor)
+{
+    setup_mean_gate("lidar_monitor.txt");
+    {
+        amrex::ParmParse pp("ABL");
+        pp.add("metmast_forcing_type", std::string("monitor"));
+    }
+    setup_sim();
+    set_velocity({5.0_rt, 1.0_rt, 0.0_rt});
+    kynema_sgf::pde::icns::MetMastForcing forcing(sim());
+    evaluate(forcing);
+    next_step();
+    evaluate(forcing);
+
+    // The footprint average is computed, but no force is applied
+    EXPECT_NEAR(forcing.footprint_velocity(0, 0), 5.0_rt, m_tol);
+    EXPECT_NEAR(forcing.footprint_velocity(0, 1), 1.0_rt, m_tol);
+    EXPECT_NEAR(forcing.body_force(0, 0), 0.0_rt, m_tol);
+    EXPECT_NEAR(utils::field_max(src_term(), 0), 0.0_rt, m_tol);
+    EXPECT_NEAR(utils::field_min(src_term(), 0), 0.0_rt, m_tol);
+}
+
 TEST_F(MetMastTest, body_force_terrain)
 {
     write_file("lidar_mean_terrain.txt", "425 425\n62.5 7 0 0 1 1 1\n");

@@ -54,6 +54,8 @@ struct ForcingParams
     amrex::Real sigma_factor;
     amrex::Real inv_tau;
     amrex::Real max_rate;
+    //! Half the range-gate length of the footprint average (0: not used)
+    amrex::Real half_gate;
 };
 
 /** Add the met-mast forcing to the momentum source
@@ -277,6 +279,75 @@ void accumulate_footprint(
         });
 }
 
+/** Accumulate range-gate footprint sums, like a lidar measures
+ *
+ *  Each gate averages the cells within half_gate of its height, with the
+ *  horizontal averaging weight, and nothing beyond the end gates. The sums
+ *  have the same layout as accumulate_footprint.
+ */
+template <bool HasTerrain>
+void accumulate_gates(
+    const amrex::Geometry& geom,
+    const StationView& st,
+    const ForcingParams& prm,
+    const amrex::MultiFab& vel_mf,
+    const amrex::iMultiFab& level_mask,
+    const amrex::MultiArray4<amrex::Real const>& terrain_arrs,
+    const amrex::MultiArray4<int const>& blank_arrs,
+    amrex::Real* sums)
+{
+    const auto dx = geom.CellSizeArray();
+    const auto prob_lo = geom.ProbLoArray();
+    const amrex::Real vol = dx[0] * dx[1] * dx[2];
+    auto const& vel_arrs = vel_mf.const_arrays();
+    auto const& mask_arrs = level_mask.const_arrays();
+
+    amrex::ParallelFor(
+        vel_mf, amrex::IntVect(0),
+        [=] AMREX_GPU_DEVICE(int nbx, int i, int j, int k) {
+            if (mask_arrs[nbx](i, j, k) == 0) {
+                return;
+            }
+            amrex::Real z = prob_lo[2] + ((k + 0.5_rt) * dx[2]);
+            if constexpr (HasTerrain) {
+                if (blank_arrs[nbx](i, j, k) == 1) {
+                    return;
+                }
+                z = amrex::max<amrex::Real>(
+                    z - terrain_arrs[nbx](i, j, k), 0.5_rt * dx[2]);
+            }
+            const amrex::Real x = prob_lo[0] + ((i + 0.5_rt) * dx[0]);
+            const amrex::Real y = prob_lo[1] + ((j + 0.5_rt) * dx[1]);
+            const auto& vel = vel_arrs[nbx];
+            const int nsum = 1 + (2 * AMREX_SPACEDIM);
+
+            for (int s = 0; s < st.nstations; ++s) {
+                const amrex::Real xs = x - st.x[s];
+                const amrex::Real ys = y - st.y[s];
+                const amrex::Real rh2 =
+                    ((xs * xs) + (ys * ys)) * prm.inv_rh2_avg;
+                if (rh2 > prm.cutoff) {
+                    continue;
+                }
+                const amrex::Real wv = std::exp(-0.25_rt * rh2) * vol;
+                for (int l = st.offset[s]; l < st.offset[s + 1]; ++l) {
+                    if (std::abs(z - st.z[l]) > prm.half_gate) {
+                        continue;
+                    }
+                    const int base = l * nsum;
+                    amrex::Gpu::Atomic::AddNoRet(&sums[base], wv);
+                    for (int n = 0; n < AMREX_SPACEDIM; ++n) {
+                        const amrex::Real u = vel(i, j, k, n);
+                        amrex::Gpu::Atomic::AddNoRet(
+                            &sums[base + 1 + n], wv * u);
+                        amrex::Gpu::Atomic::AddNoRet(
+                            &sums[base + 1 + AMREX_SPACEDIM + n], wv * u * u);
+                    }
+                }
+            }
+        });
+}
+
 /** Add the body-force body force to the momentum source
  *
  *  The force of each station level is interpolated to the cell with the
@@ -388,14 +459,18 @@ MetMastForcing::MetMastForcing(const CFDSim& sim)
     pp_abl.query("metmast_forcing_type", forcing_type);
     if (forcing_type == "body_force") {
         m_body_force_mode = true;
+    } else if (forcing_type == "monitor") {
+        m_body_force_mode = true;
+        m_monitor_only = true;
     } else if (forcing_type != "relaxation") {
         amrex::Abort(
-            "MetMastForcing: ABL.metmast_forcing_type must be relaxation or "
-            "body_force");
+            "MetMastForcing: ABL.metmast_forcing_type must be relaxation, "
+            "body_force or monitor");
     }
     pp_abl.query("metmast_averaging_time", m_averaging_time);
     m_averaging_radius = m_horizontal_radius;
     pp_abl.query("metmast_averaging_radius", m_averaging_radius);
+    pp_abl.query("metmast_gate_length", m_gate_length);
     m_integral_timescale = 4.0_rt * m_timescale;
     pp_abl.query("metmast_integral_timescale", m_integral_timescale);
     pp_abl.query("metmast_force_vertical", m_force_vertical);
@@ -536,17 +611,32 @@ void MetMastForcing::update_body_force(
                 amrex::MFInfo());
             level_mask.setVal(1);
         }
-        if (has_terrain) {
+        const auto& geom = m_mesh.Geom(lev);
+        const auto terrain_arrs =
+            has_terrain ? repo.get_field("terrain_height")(lev).const_arrays()
+                        : amrex::MultiArray4<amrex::Real const>();
+        const auto blank_arrs =
+            has_terrain
+                ? repo.get_int_field("terrain_blank")(lev).const_arrays()
+                : amrex::MultiArray4<int const>();
+        if (m_gate_length > 0.0_rt) {
+            if (has_terrain) {
+                metmast::accumulate_gates<true>(
+                    geom, st, prm, velocity(lev), level_mask, terrain_arrs,
+                    blank_arrs, m_sums_d.data());
+            } else {
+                metmast::accumulate_gates<false>(
+                    geom, st, prm, velocity(lev), level_mask, terrain_arrs,
+                    blank_arrs, m_sums_d.data());
+            }
+        } else if (has_terrain) {
             metmast::accumulate_footprint<true>(
-                m_mesh.Geom(lev), st, prm, velocity(lev), level_mask,
-                repo.get_field("terrain_height")(lev).const_arrays(),
-                repo.get_int_field("terrain_blank")(lev).const_arrays(),
-                m_sums_d.data());
+                geom, st, prm, velocity(lev), level_mask, terrain_arrs,
+                blank_arrs, m_sums_d.data());
         } else {
             metmast::accumulate_footprint<false>(
-                m_mesh.Geom(lev), st, prm, velocity(lev), level_mask,
-                amrex::MultiArray4<amrex::Real const>(),
-                amrex::MultiArray4<int const>(), m_sums_d.data());
+                geom, st, prm, velocity(lev), level_mask, terrain_arrs,
+                blank_arrs, m_sums_d.data());
         }
     }
     amrex::Gpu::copy(
@@ -577,7 +667,8 @@ void MetMastForcing::update_body_force(
                 sums[(l * nsum) + 1 + AMREX_SPACEDIM + n] / wsum;
             m_footprint_mean[idx] += alpha * (m1 - m_footprint_mean[idx]);
             m_second_moment[idx] += alpha * (m2 - m_second_moment[idx]);
-            if ((n == AMREX_SPACEDIM - 1) && !m_force_vertical) {
+            if (m_monitor_only ||
+                ((n == AMREX_SPACEDIM - 1) && !m_force_vertical)) {
                 m_force[idx] = 0.0_rt;
                 continue;
             }
@@ -714,7 +805,8 @@ void MetMastForcing::operator()(
         .sigma_factor = m_sigma_factor,
         .inv_tau = 1.0_rt / m_timescale,
         .max_rate = (dt > 0.0_rt) ? 1.0_rt / dt
-                                  : std::numeric_limits<amrex::Real>::max()};
+                                  : std::numeric_limits<amrex::Real>::max(),
+        .half_gate = 0.5_rt * m_gate_length};
 
     const auto& geom = m_mesh.Geom(lev);
     const auto& repo = m_sim.repo();
@@ -723,6 +815,9 @@ void MetMastForcing::operator()(
         if (m_time.time_index() != m_last_update_step) {
             update_body_force(st, prm);
             m_last_update_step = m_time.time_index();
+        }
+        if (m_monitor_only) {
+            return;
         }
         if (repo.field_exists("terrain_height")) {
             AMREX_ALWAYS_ASSERT_WITH_MESSAGE(

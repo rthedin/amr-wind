@@ -409,7 +409,7 @@ cells inside the terrain are not forced.
 
 .. input_param:: ABL.metmast_forcing_type
 
-   **type:** String, optional, default = relaxation
+   **type:** String, optional, default = relaxation (or body_force, monitor)
 
    ``relaxation`` pulls each cell's own velocity towards the measurements as
    described above. In LES this
@@ -448,6 +448,20 @@ cells inside the terrain are not forced.
    differences should be corrected through the inflow or the large-scale
    forcing instead.
 
+   ``monitor`` computes and writes the footprint averages like ``body_force``
+   but applies no force. It gives the model's virtual-lidar values, for
+   example to compare a run with lidar data or to build a target with the same
+   averaging as the controller.
+
+   The controller is a loop with lags: the time filter :math:`T_{avg}` and the
+   time :math:`\tau_d` for the forced air to reach the lidar. Air stays in the
+   footprint for about :math:`T_p \approx R_h / U`, which is the gain of the
+   force on the footprint average. For a stable loop, keep the integral slow
+   compared with these lags, :math:`\tau_I \gtrsim 2 T_p (T_{avg} + \tau_d)`.
+   In LES, an averaging time shorter than the large-eddy time scale (several
+   minutes) makes the controller follow individual large eddies and add slow
+   variability; average over about the lidar averaging period instead.
+
 .. input_param:: ABL.metmast_averaging_time
 
    **type:** Real, optional, default = 120.0
@@ -463,6 +477,17 @@ cells inside the terrain are not forced.
    measurement volume makes the controller hold the velocity at the lidar
    while the force is still spread over
    :input_param:`ABL.metmast_horizontal_radius`.
+
+.. input_param:: ABL.metmast_gate_length
+
+   **type:** Real, optional, default = 0.0
+
+   Range-gate length of the footprint average in meters. When positive, each
+   gate averages only the cells within half this length of its height, like a
+   lidar range gate. When zero, the average uses the forcing weights, which
+   interpolate between gates and taper above and below the end gates; that
+   biases the end gates towards the flow outside the measured range. Use a
+   length of at least the cell height, so that every gate contains cells.
 
 .. input_param:: ABL.metmast_integral_timescale
 
