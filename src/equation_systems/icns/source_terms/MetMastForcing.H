@@ -69,6 +69,12 @@ struct ForcingParams;
  *  forcing weights and their taper beyond the end gates.
  *  `ABL.metmast_forcing_type = monitor` computes and writes the footprint
  *  averages without applying any force.
+ *
+ *  With `ABL.metmast_gain_schedule = true`, each level sets its own gains
+ *  from the time the air spends under the force, \f$T_p = R_h / U\f$, with
+ *  \f$U\f$ the filtered footprint speed: \f$\tau_I = k_I T_p (T_{avg} +
+ *  T_p)\f$ and \f$\tau = \tau_I / r\f$. Slow air, which the force
+ *  accelerates the most, gets the gentlest gains.
  */
 class MetMastForcing : public MomentumSource::Register<MetMastForcing>
 {
@@ -107,6 +113,18 @@ public:
     [[nodiscard]] amrex::Real body_force(int ilev, int n) const
     {
         return m_force[(ilev * AMREX_SPACEDIM) + n];
+    }
+
+    //! Proportional time scale in use for a level (global index)
+    [[nodiscard]] amrex::Real level_timescale(int ilev) const
+    {
+        return m_level_tau[ilev];
+    }
+
+    //! Integral time scale in use for a level (global index)
+    [[nodiscard]] amrex::Real level_integral_timescale(int ilev) const
+    {
+        return m_level_ti[ilev];
     }
 
 private:
@@ -179,6 +197,14 @@ private:
     amrex::Real m_gate_length{0};
     //! Compute and write the footprint averages without forcing
     bool m_monitor_only{false};
+    //! Schedule the gains of each level from the local residence time
+    bool m_gain_schedule{false};
+    //! Scheduled tau_I = factor * T_p * (T_avg + T_p), with T_p = R_h / U
+    amrex::Real m_integral_factor{2};
+    //! Scheduled tau = tau_I / ratio
+    amrex::Real m_integral_ratio{10};
+    //! Floor on the footprint speed of the gain schedule
+    amrex::Real m_min_speed{0.5};
     //! Integral time scale of the controller (0 or negative: no integral)
     amrex::Real m_integral_timescale{-1};
     //! Also force the vertical velocity in body-force mode
@@ -198,6 +224,9 @@ private:
     mutable amrex::Vector<amrex::Real> m_second_moment;
     mutable amrex::Vector<amrex::Real> m_integral;
     mutable amrex::Vector<amrex::Real> m_force;
+    //! Gains of each level in use (fixed or scheduled)
+    mutable amrex::Vector<amrex::Real> m_level_tau;
+    mutable amrex::Vector<amrex::Real> m_level_ti;
     mutable amrex::Gpu::DeviceVector<amrex::Real> m_force_d;
     mutable amrex::Gpu::DeviceVector<amrex::Real> m_sums_d;
     mutable bool m_initialized{false};

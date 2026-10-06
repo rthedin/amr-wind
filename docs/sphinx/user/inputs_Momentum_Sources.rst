@@ -489,6 +489,47 @@ cells inside the terrain are not forced.
    biases the end gates towards the flow outside the measured range. Use a
    length of at least the cell height, so that every gate contains cells.
 
+.. input_param:: ABL.metmast_gain_schedule
+
+   **type:** Boolean, optional, default = false
+
+   Set the gains of each gate from the local flow instead of
+   :input_param:`ABL.metmast_timescale` and
+   :input_param:`ABL.metmast_integral_timescale`. With the filtered
+   footprint speed :math:`U` (at least :input_param:`ABL.metmast_min_speed`),
+   the air spends :math:`T_p = R_h / U` under the force, which is also taken
+   as the delay, and
+
+   .. math::
+
+      \tau_I = k_I \, T_p \, (T_{avg} + T_p), \qquad \tau = \tau_I / r
+
+   with :math:`k_I` = :input_param:`ABL.metmast_integral_factor` and
+   :math:`r` = :input_param:`ABL.metmast_integral_ratio`. Slow air, which a
+   force accelerates the most, gets the gentlest gains. The integral is kept as
+   a force, so changing gains do not rescale its past. The gains in use are
+   written as the last two columns of the output file.
+
+.. input_param:: ABL.metmast_integral_factor
+
+   **type:** Real, optional, default = 2.0
+
+   :math:`k_I` of the gain schedule. About 2 gives a phase margin near
+   60 degrees; larger is slower and more robust.
+
+.. input_param:: ABL.metmast_integral_ratio
+
+   **type:** Real, optional, default = 10.0
+
+   Ratio :math:`\tau_I / \tau` of the gain schedule.
+
+.. input_param:: ABL.metmast_min_speed
+
+   **type:** Real, optional, default = 0.5
+
+   Smallest footprint speed in m/s used by the gain schedule, which bounds the
+   residence time in nearly stagnant air.
+
 .. input_param:: ABL.metmast_integral_timescale
 
    **type:** Real, optional, default = 4 :input_param:`ABL.metmast_timescale`

@@ -471,6 +471,15 @@ MetMastForcing::MetMastForcing(const CFDSim& sim)
     m_averaging_radius = m_horizontal_radius;
     pp_abl.query("metmast_averaging_radius", m_averaging_radius);
     pp_abl.query("metmast_gate_length", m_gate_length);
+    pp_abl.query("metmast_gain_schedule", m_gain_schedule);
+    pp_abl.query("metmast_integral_factor", m_integral_factor);
+    pp_abl.query("metmast_integral_ratio", m_integral_ratio);
+    pp_abl.query("metmast_min_speed", m_min_speed);
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+        (m_integral_factor > 0.0_rt) && (m_integral_ratio > 0.0_rt) &&
+            (m_min_speed > 0.0_rt),
+        "MetMastForcing: gain schedule factors and minimum speed must be "
+        "positive");
     m_integral_timescale = 4.0_rt * m_timescale;
     pp_abl.query("metmast_integral_timescale", m_integral_timescale);
     pp_abl.query("metmast_force_vertical", m_force_vertical);
@@ -490,6 +499,8 @@ MetMastForcing::MetMastForcing(const CFDSim& sim)
     m_second_moment.resize(nvals, 0.0_rt);
     m_integral.resize(nvals, 0.0_rt);
     m_force.resize(nvals, 0.0_rt);
+    m_level_tau.resize(num_levels(), m_timescale);
+    m_level_ti.resize(num_levels(), m_integral_timescale);
     copy_to_device(m_force, m_force_d);
     m_sums_d.resize(
         static_cast<amrex::Long>(num_levels()) * (1 + (2 * AMREX_SPACEDIM)));
@@ -655,34 +666,68 @@ void MetMastForcing::update_body_force(
                                    : 0.0_rt;
     for (int l = 0; l < nlevels; ++l) {
         const amrex::Real wsum = sums[static_cast<amrex::Long>(l) * nsum];
+        if (wsum <= 0.0_rt) {
+            // No cells in this footprint, e.g. inside the terrain
+            for (int n = 0; n < AMREX_SPACEDIM; ++n) {
+                m_force[(l * AMREX_SPACEDIM) + n] = 0.0_rt;
+            }
+            continue;
+        }
         for (int n = 0; n < AMREX_SPACEDIM; ++n) {
             const int idx = (l * AMREX_SPACEDIM) + n;
-            if (wsum <= 0.0_rt) {
-                // No cells in this footprint, e.g. inside the terrain
-                m_force[idx] = 0.0_rt;
-                continue;
-            }
             const amrex::Real m1 = sums[(l * nsum) + 1 + n] / wsum;
             const amrex::Real m2 =
                 sums[(l * nsum) + 1 + AMREX_SPACEDIM + n] / wsum;
             m_footprint_mean[idx] += alpha * (m1 - m_footprint_mean[idx]);
             m_second_moment[idx] += alpha * (m2 - m_second_moment[idx]);
+        }
+
+        // Gains of this level: fixed, or scheduled from the time the air
+        // spends under the force, T_p = R_h / U, which is also the delay
+        amrex::Real inv_tau_l = prm.inv_tau;
+        amrex::Real inv_ti_l = inv_ti;
+        if (m_gain_schedule) {
+            const int i0 = l * AMREX_SPACEDIM;
+            const amrex::Real ux = m_footprint_mean[i0];
+            const amrex::Real uy = m_footprint_mean[i0 + 1];
+            const amrex::Real speed =
+                amrex::max(std::sqrt((ux * ux) + (uy * uy)), m_min_speed);
+            const amrex::Real tp = m_horizontal_radius / speed;
+            const amrex::Real ti =
+                m_integral_factor * tp * (m_averaging_time + tp);
+            inv_ti_l = 1.0_rt / ti;
+            inv_tau_l = m_integral_ratio / ti;
+        }
+        m_level_tau[l] = 1.0_rt / inv_tau_l;
+        m_level_ti[l] = (inv_ti_l > 0.0_rt) ? 1.0_rt / inv_ti_l : 0.0_rt;
+
+        for (int n = 0; n < AMREX_SPACEDIM; ++n) {
+            const int idx = (l * AMREX_SPACEDIM) + n;
             if (m_monitor_only ||
                 ((n == AMREX_SPACEDIM - 1) && !m_force_vertical)) {
                 m_force[idx] = 0.0_rt;
                 continue;
             }
             const amrex::Real err = m_level_vel[idx] - m_footprint_mean[idx];
-            if (advance) {
-                m_integral[idx] += err * dt;
+            if (m_gain_schedule) {
+                // The gains change in time, so integrate the force itself
+                if (advance) {
+                    m_integral[idx] += err * dt * inv_ti_l;
+                }
+                m_force[idx] = (err * inv_tau_l) + m_integral[idx];
+            } else {
+                if (advance) {
+                    m_integral[idx] += err * dt;
+                }
+                m_force[idx] = (err * inv_tau_l) + (m_integral[idx] * inv_ti_l);
             }
-            m_force[idx] = (err * prm.inv_tau) + (m_integral[idx] * inv_ti);
             if ((m_max_force > 0.0_rt) &&
                 (std::abs(m_force[idx]) > m_max_force)) {
                 // Saturated: cap the force and stop integrating (anti-windup)
                 m_force[idx] = std::copysign(m_max_force, m_force[idx]);
                 if (advance) {
-                    m_integral[idx] -= err * dt;
+                    m_integral[idx] -=
+                        m_gain_schedule ? err * dt * inv_ti_l : err * dt;
                 }
             }
         }
@@ -716,7 +761,7 @@ void MetMastForcing::write_output() const
     if (start) {
         ofh << "# step time station level z obs_u obs_v obs_w obs_su obs_sv "
                "obs_sw mean_u mean_v mean_w sigma_u sigma_v sigma_w force_x "
-               "force_y force_z\n";
+               "force_y force_z tau tau_I\n";
     }
     m_output_started = true;
     ofh << std::setprecision(8);
@@ -739,7 +784,7 @@ void MetMastForcing::write_output() const
             for (int n = 0; n < AMREX_SPACEDIM; ++n) {
                 ofh << " " << body_force(l, n);
             }
-            ofh << "\n";
+            ofh << " " << m_level_tau[l] << " " << m_level_ti[l] << "\n";
         }
     }
 }

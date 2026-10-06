@@ -477,6 +477,76 @@ TEST_F(MetMastTest, body_force_monitor)
     EXPECT_NEAR(utils::field_min(src_term(), 0), 0.0_rt, m_tol);
 }
 
+TEST_F(MetMastTest, body_force_gain_schedule)
+{
+    setup_mean_gate("lidar_schedule.txt");
+    {
+        amrex::ParmParse pp("ABL");
+        pp.add("metmast_gain_schedule", true);
+    }
+    setup_sim();
+    set_velocity({5.0_rt, 0.0_rt, 0.0_rt});
+    kynema_sgf::pde::icns::MetMastForcing forcing(sim());
+    evaluate(forcing);
+
+    // T_p = R_h / U = 500 / 5 s, tau_I = 2 T_p (T_avg + T_p), tau = tau_I / 10
+    const amrex::Real tp = 100.0_rt;
+    const amrex::Real ti = 2.0_rt * tp * (120.0_rt + tp);
+    EXPECT_NEAR(forcing.level_integral_timescale(0), ti, 1.0e3_rt * m_tol);
+    EXPECT_NEAR(forcing.level_timescale(0), ti / 10.0_rt, 1.0e2_rt * m_tol);
+    EXPECT_NEAR(forcing.body_force(0, 0), 2.0_rt * 10.0_rt / ti, m_tol);
+    EXPECT_NEAR(probe(8, 8, 3, 0), 2.0_rt * 10.0_rt / ti, m_tol);
+}
+
+TEST_F(MetMastTest, body_force_gain_schedule_floor)
+{
+    setup_mean_gate("lidar_schedule_floor.txt");
+    {
+        amrex::ParmParse pp("ABL");
+        pp.add("metmast_gain_schedule", true);
+    }
+    setup_sim();
+    set_velocity({0.1_rt, 0.0_rt, 0.0_rt});
+    kynema_sgf::pde::icns::MetMastForcing forcing(sim());
+    evaluate(forcing);
+
+    // Nearly stagnant air: the speed is floored at 0.5 m/s
+    const amrex::Real tp = 500.0_rt / 0.5_rt;
+    const amrex::Real ti = 2.0_rt * tp * (120.0_rt + tp);
+    EXPECT_NEAR(forcing.level_integral_timescale(0), ti, 1.0e5_rt * m_tol);
+    EXPECT_NEAR(
+        forcing.body_force(0, 0), (7.0_rt - 0.1_rt) * 10.0_rt / ti, m_tol);
+}
+
+TEST_F(MetMastTest, body_force_gain_schedule_integral)
+{
+    setup_mean_gate("lidar_schedule_integral.txt");
+    {
+        amrex::ParmParse pp("ABL");
+        pp.add("metmast_gain_schedule", true);
+        // No time filter, so the gains follow the velocity immediately
+        pp.add("metmast_averaging_time", 1.0e-3_rt);
+    }
+    setup_sim();
+    set_velocity({5.0_rt, 0.0_rt, 0.0_rt});
+    kynema_sgf::pde::icns::MetMastForcing forcing(sim());
+    evaluate(forcing);
+    next_step();
+    const amrex::Real dt = sim().time().delta_t();
+    evaluate(forcing);
+    next_step();
+    set_velocity({10.0_rt, 0.0_rt, 0.0_rt});
+    evaluate(forcing);
+
+    // The integral is a force: each step adds err dt / tau_I of that step,
+    // so a change of gains does not rescale the past
+    const amrex::Real ti1 = 2.0_rt * 100.0_rt * (1.0e-3_rt + 100.0_rt);
+    const amrex::Real ti2 = 2.0_rt * 50.0_rt * (1.0e-3_rt + 50.0_rt);
+    const amrex::Real integ = (2.0_rt * dt / ti1) + (-3.0_rt * dt / ti2);
+    EXPECT_NEAR(
+        forcing.body_force(0, 0), (-3.0_rt * 10.0_rt / ti2) + integ, m_tol);
+}
+
 TEST_F(MetMastTest, body_force_terrain)
 {
     write_file("lidar_mean_terrain.txt", "425 425\n62.5 7 0 0 1 1 1\n");
