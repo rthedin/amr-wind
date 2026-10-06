@@ -93,6 +93,7 @@ protected:
         auto& time = sim().time();
         time.new_timestep();
         time.set_current_cfl(2.0_rt, 0.0_rt, 0.0_rt);
+        time.advance_time();
     }
 
     // One lidar gate at the cell (8, 8, 3) center, in body-force mode
@@ -545,6 +546,38 @@ TEST_F(MetMastTest, body_force_gain_schedule_integral)
     const amrex::Real integ = (2.0_rt * dt / ti1) + (-3.0_rt * dt / ti2);
     EXPECT_NEAR(
         forcing.body_force(0, 0), (-3.0_rt * 10.0_rt / ti2) + integ, m_tol);
+}
+
+TEST_F(MetMastTest, body_force_start_time)
+{
+    setup_mean_gate("lidar_start_time.txt");
+    {
+        amrex::ParmParse pp("ABL");
+        pp.add("metmast_start_time", 0.25_rt);
+    }
+    setup_sim();
+    // Spin-up transient: an empty footprint
+    set_velocity({0.0_rt, 0.0_rt, 0.0_rt});
+    kynema_sgf::pde::icns::MetMastForcing forcing(sim());
+    auto& time = sim().time();
+    int nsteps = 0;
+    while (time.current_time() < 0.25_rt) {
+        evaluate(forcing);
+        // Not started: no force and no average
+        EXPECT_NEAR(forcing.body_force(0, 0), 0.0_rt, m_tol);
+        EXPECT_NEAR(utils::field_max(src_term(), 0), 0.0_rt, m_tol);
+        EXPECT_NEAR(forcing.footprint_velocity(0, 0), 0.0_rt, m_tol);
+        next_step();
+        ASSERT_LT(++nsteps, 100);
+    }
+    EXPECT_GT(nsteps, 0);
+
+    // First update after the start: the filter starts from the current flow,
+    // not from the transient, and the integral from zero
+    set_velocity({5.0_rt, 0.0_rt, 0.0_rt});
+    evaluate(forcing);
+    EXPECT_NEAR(forcing.footprint_velocity(0, 0), 5.0_rt, m_tol);
+    EXPECT_NEAR(forcing.body_force(0, 0), 2.0_rt / m_tau, m_tol);
 }
 
 TEST_F(MetMastTest, body_force_terrain)

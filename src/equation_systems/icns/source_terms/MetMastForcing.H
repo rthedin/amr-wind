@@ -75,6 +75,10 @@ struct ForcingParams;
  *  \f$U\f$ the filtered footprint speed: \f$\tau_I = k_I T_p (T_{avg} +
  *  T_p)\f$ and \f$\tau = \tau_I / r\f$. Slow air, which the force
  *  accelerates the most, gets the gentlest gains.
+ *
+ *  `ABL.metmast_start_time` delays the footprint average and the force, so
+ *  that the controller starts from the flow at that time and does not
+ *  integrate a spin-up transient.
  */
 class MetMastForcing : public MomentumSource::Register<MetMastForcing>
 {
@@ -197,6 +201,8 @@ private:
     amrex::Real m_gate_length{0};
     //! Compute and write the footprint averages without forcing
     bool m_monitor_only{false};
+    //! Simulation time from which the footprint average and force start
+    amrex::Real m_start_time{0};
     //! Schedule the gains of each level from the local residence time
     bool m_gain_schedule{false};
     //! Scheduled tau_I = factor * T_p * (T_avg + T_p), with T_p = R_h / U

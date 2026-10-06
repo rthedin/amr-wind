@@ -489,6 +489,17 @@ cells inside the terrain are not forced.
    biases the end gates towards the flow outside the measured range. Use a
    length of at least the cell height, so that every gate contains cells.
 
+.. input_param:: ABL.metmast_start_time
+
+   **type:** Real, optional, default = 0.0
+
+   Simulation time in seconds from which the footprint averages and the force
+   start. Before it the body force is zero and nothing is averaged; at the
+   first update after it the time filter starts from the current footprint
+   average and the integral from zero. Use it to start the controller after
+   the flow has spun up, for example after a restart from a precursor, so that
+   the controller does not integrate the spin-up transient.
+
 .. input_param:: ABL.metmast_gain_schedule
 
    **type:** Boolean, optional, default = false
