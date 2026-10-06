@@ -580,6 +580,39 @@ TEST_F(MetMastTest, body_force_start_time)
     EXPECT_NEAR(forcing.body_force(0, 0), 2.0_rt / m_tau, m_tol);
 }
 
+TEST_F(MetMastTest, body_force_start_delay)
+{
+    setup_mean_gate("lidar_start_delay.txt");
+    {
+        amrex::ParmParse pp("ABL");
+        pp.add("metmast_start_delay", 0.25_rt);
+    }
+    setup_sim();
+    // Start the run at a later time, as after a restart
+    auto& time = sim().time();
+    for (int n = 0; n < 5; ++n) {
+        next_step();
+    }
+    const amrex::Real t_first = time.current_time();
+    ASSERT_GT(t_first, 0.25_rt);
+    set_velocity({0.0_rt, 0.0_rt, 0.0_rt});
+    kynema_sgf::pde::icns::MetMastForcing forcing(sim());
+    int nsteps = 0;
+    while (time.current_time() < t_first + 0.25_rt) {
+        evaluate(forcing);
+        // The delay counts from the first step of this run
+        EXPECT_NEAR(forcing.body_force(0, 0), 0.0_rt, m_tol);
+        EXPECT_NEAR(forcing.footprint_velocity(0, 0), 0.0_rt, m_tol);
+        next_step();
+        ASSERT_LT(++nsteps, 100);
+    }
+    EXPECT_GT(nsteps, 1);
+    set_velocity({5.0_rt, 0.0_rt, 0.0_rt});
+    evaluate(forcing);
+    EXPECT_NEAR(forcing.footprint_velocity(0, 0), 5.0_rt, m_tol);
+    EXPECT_NEAR(forcing.body_force(0, 0), 2.0_rt / m_tau, m_tol);
+}
+
 TEST_F(MetMastTest, body_force_terrain)
 {
     write_file("lidar_mean_terrain.txt", "425 425\n62.5 7 0 0 1 1 1\n");

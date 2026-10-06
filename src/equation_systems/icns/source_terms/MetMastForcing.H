@@ -76,9 +76,11 @@ struct ForcingParams;
  *  T_p)\f$ and \f$\tau = \tau_I / r\f$. Slow air, which the force
  *  accelerates the most, gets the gentlest gains.
  *
- *  `ABL.metmast_start_time` delays the footprint average and the force, so
- *  that the controller starts from the flow at that time and does not
- *  integrate a spin-up transient.
+ *  `ABL.metmast_start_time` (absolute) and `ABL.metmast_start_delay`
+ *  (after the first step of the run, e.g. a restart from a mapped flat
+ *  simulation) delay the footprint average and the force, so that the
+ *  controller starts from the flow at that time and does not integrate a
+ *  spin-up transient.
  */
 class MetMastForcing : public MomentumSource::Register<MetMastForcing>
 {
@@ -203,6 +205,10 @@ private:
     bool m_monitor_only{false};
     //! Simulation time from which the footprint average and force start
     amrex::Real m_start_time{0};
+    //! Delay after the first step of this run before they start
+    amrex::Real m_start_delay{0};
+    //! Time of the first step of this run (negative before it)
+    mutable amrex::Real m_first_time{-1};
     //! Schedule the gains of each level from the local residence time
     bool m_gain_schedule{false};
     //! Scheduled tau_I = factor * T_p * (T_avg + T_p), with T_p = R_h / U

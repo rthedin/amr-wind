@@ -473,6 +473,7 @@ MetMastForcing::MetMastForcing(const CFDSim& sim)
     pp_abl.query("metmast_gate_length", m_gate_length);
     pp_abl.query("metmast_gain_schedule", m_gain_schedule);
     pp_abl.query("metmast_start_time", m_start_time);
+    pp_abl.query("metmast_start_delay", m_start_delay);
     pp_abl.query("metmast_integral_factor", m_integral_factor);
     pp_abl.query("metmast_integral_ratio", m_integral_ratio);
     pp_abl.query("metmast_min_speed", m_min_speed);
@@ -596,7 +597,12 @@ void MetMastForcing::update_body_force(
     const metmast::StationView& st, const metmast::ForcingParams& prm) const
 {
     BL_PROFILE("kynema-sgf::MetMastForcing::update_body_force");
-    if (m_time.current_time() < m_start_time) {
+    if (m_first_time < 0.0_rt) {
+        // First step of this run, a fresh start or a restart
+        m_first_time = m_time.current_time();
+    }
+    if ((m_time.current_time() < m_start_time) ||
+        (m_time.current_time() < m_first_time + m_start_delay)) {
         // Not started: no averaging and no force, so the filter starts from
         // the flow at the start time instead of the spin-up transient
         return;

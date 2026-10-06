@@ -500,6 +500,18 @@ cells inside the terrain are not forced.
    the flow has spun up, for example after a restart from a precursor, so that
    the controller does not integrate the spin-up transient.
 
+.. input_param:: ABL.metmast_start_delay
+
+   **type:** Real, optional, default = 0.0
+
+   Delay in seconds after the first step of the run, a fresh start or a
+   restart, before the footprint averages and the force start, with the same
+   start as :input_param:`ABL.metmast_start_time`; the later of the two
+   applies. Immersed-terrain runs usually start from a flat simulation mapped
+   onto the terrain, so the flow in and around the terrain spins up first;
+   delay the controller by at least the time to fill the terrain features,
+   for example 10 minutes.
+
 .. input_param:: ABL.metmast_gain_schedule
 
    **type:** Boolean, optional, default = false
