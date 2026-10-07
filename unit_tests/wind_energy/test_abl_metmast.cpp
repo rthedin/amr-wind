@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <fstream>
 #include "ks_test_utils/MeshTest.H"
@@ -546,6 +547,151 @@ TEST_F(MetMastTest, body_force_gain_schedule_integral)
     const amrex::Real integ = (2.0_rt * dt / ti1) + (-3.0_rt * dt / ti2);
     EXPECT_NEAR(
         forcing.body_force(0, 0), (-3.0_rt * 10.0_rt / ti2) + integ, m_tol);
+}
+
+TEST_F(MetMastTest, body_force_integral_deadband)
+{
+    setup_mean_gate("lidar_deadband.txt");
+    {
+        amrex::ParmParse pp("ABL");
+        pp.add("metmast_integral_deadband", 1.5_rt);
+        // No time filter, so the error follows the velocity immediately
+        pp.add("metmast_averaging_time", 1.0e-3_rt);
+    }
+    setup_sim();
+    set_velocity({5.0_rt, 1.0_rt, 0.0_rt});
+    kynema_sgf::pde::icns::MetMastForcing forcing(sim());
+    evaluate(forcing);
+    next_step();
+    const amrex::Real dt1 = sim().time().delta_t();
+    evaluate(forcing);
+
+    // Errors 2 (u) and 1 (v): the proportional term sees the full error, the
+    // integral only the part beyond the deadband, none of v
+    const amrex::Real ti = 4.0_rt * m_tau;
+    EXPECT_NEAR(
+        forcing.body_force(0, 0), (2.0_rt / m_tau) + (0.5_rt * dt1 / ti),
+        m_tol);
+    EXPECT_NEAR(forcing.body_force(0, 1), 1.0_rt / m_tau, m_tol);
+
+    // Negative errors are cut symmetrically: error -2 integrates -0.5
+    next_step();
+    const amrex::Real dt2 = sim().time().delta_t();
+    set_velocity({9.0_rt, 1.0_rt, 0.0_rt});
+    evaluate(forcing);
+    EXPECT_NEAR(forcing.footprint_velocity(0, 0), 9.0_rt, m_tol);
+    EXPECT_NEAR(
+        forcing.body_force(0, 0),
+        (-2.0_rt / m_tau) + (0.5_rt * (dt1 - dt2) / ti), m_tol);
+}
+
+TEST_F(MetMastTest, body_force_auto_deadband)
+{
+    setup_mean_gate("lidar_auto_deadband.txt");
+    const amrex::Real tavg = 0.2_rt;
+    const amrex::Real provisional = 0.05_rt;
+    {
+        amrex::ParmParse pp("ABL");
+        pp.add("metmast_integral_deadband_factor", 3.0_rt);
+        pp.add("metmast_integral_deadband", provisional);
+        pp.add("metmast_averaging_time", tavg);
+    }
+    setup_sim();
+    kynema_sgf::pde::icns::MetMastForcing forcing(sim());
+
+    // The same filters, deadband and warm-up as the controller
+    const amrex::Real ti = 4.0_rt * m_tau;
+    amrex::Real mean = 0.0_rt;
+    amrex::Real fast = 0.0_rt;
+    amrex::Real var = 0.0_rt;
+    amrex::Real integ = 0.0_rt;
+    amrex::Real elapsed = 0.0_rt;
+    int nwarm = 0;
+    int nint = 0;
+    for (int step = 0; elapsed < 3.0_rt * tavg; ++step) {
+        ASSERT_LT(step, 500);
+        // A wandering footprint: u alternates around 5, v sits on the target
+        const amrex::Real u = (step % 2 == 0) ? 4.0_rt : 6.5_rt;
+        set_velocity({u, 2.0_rt, 0.0_rt});
+        if (step == 0) {
+            mean = u;
+            fast = u;
+        } else {
+            next_step();
+            const amrex::Real dt = sim().time().delta_t();
+            const amrex::Real a = std::min(dt / tavg, 1.0_rt);
+            const amrex::Real af = std::min(dt / (0.1_rt * tavg), 1.0_rt);
+            elapsed += dt;
+            mean += a * (u - mean);
+            fast += af * (u - fast);
+            var += a * (((fast - mean) * (fast - mean)) - var);
+        }
+        evaluate(forcing);
+        // The fixed deadband is provisional until the estimate has one
+        // averaging time of data
+        const bool ready = elapsed >= tavg;
+        const amrex::Real d =
+            ready ? 3.0_rt * std::sqrt(var * 0.1_rt) : provisional;
+        const amrex::Real err = 7.0_rt - mean;
+        if (step > 0) {
+            integ += std::copysign(std::max(std::abs(err) - d, 0.0_rt), err) *
+                     sim().time().delta_t();
+        }
+        if (ready) {
+            ++nint;
+        } else {
+            ++nwarm;
+        }
+        EXPECT_NEAR(forcing.integral_deadband(0, 0), d, m_tol);
+        // No wander in v: no deadband once the estimate is ready
+        EXPECT_NEAR(
+            forcing.integral_deadband(0, 1), ready ? 0.0_rt : provisional,
+            m_tol);
+        EXPECT_NEAR(
+            forcing.body_force(0, 0), (err / m_tau) + (integ / ti), m_tol);
+    }
+    // Both the provisional and the automatic deadband were exercised
+    EXPECT_GT(nwarm, 1);
+    EXPECT_GT(nint, 1);
+    EXPECT_GT(forcing.integral_deadband(0, 0), 2.0_rt * provisional);
+}
+
+TEST_F(MetMastTest, body_force_auto_deadband_restart)
+{
+    write_file(
+        "metmast_state_auto.txt",
+        "1\n"
+        "6 37 10 5.5 0.4\n"
+        "1 2 0 1 0\n"
+        "0 0 0 0 0\n"
+        "0.3\n");
+    setup_mean_gate("lidar_auto_restart.txt");
+    {
+        amrex::ParmParse pp("ABL");
+        pp.add("metmast_restart_state", std::string("metmast_state_auto.txt"));
+        pp.add("metmast_integral_deadband_factor", 3.0_rt);
+    }
+    setup_sim();
+    set_velocity({5.0_rt, 0.0_rt, 0.0_rt});
+    next_step();
+    const amrex::Real dt = sim().time().delta_t();
+    kynema_sgf::pde::icns::MetMastForcing forcing(sim());
+    evaluate(forcing);
+
+    // The fast average, its variance and the warm-up clock continue from the
+    // saved state; still in the warm-up, so the integral is unchanged
+    const amrex::Real a = dt / 120.0_rt;
+    const amrex::Real af = dt / 12.0_rt;
+    const amrex::Real mean = 6.0_rt + (a * (5.0_rt - 6.0_rt));
+    const amrex::Real fast = 5.5_rt + (af * (5.0_rt - 5.5_rt));
+    const amrex::Real var =
+        0.4_rt + (a * (((fast - mean) * (fast - mean)) - 0.4_rt));
+    EXPECT_NEAR(
+        forcing.integral_deadband(0, 0), 3.0_rt * std::sqrt(var * 0.1_rt),
+        m_tol);
+    EXPECT_NEAR(
+        forcing.body_force(0, 0),
+        ((7.0_rt - mean) / m_tau) + (10.0_rt / (4.0_rt * m_tau)), m_tol);
 }
 
 TEST_F(MetMastTest, body_force_start_time)

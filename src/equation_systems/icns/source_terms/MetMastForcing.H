@@ -81,6 +81,23 @@ struct ForcingParams;
  *  simulation) delay the footprint average and the force, so that the
  *  controller starts from the flow at that time and does not integrate a
  *  spin-up transient.
+ *
+ *  `ABL.metmast_integral_deadband` \f$d\f$ integrates only the part of the
+ *  error beyond what a footprint average over \f$T_{avg}\f$ resolves,
+ *  \f$\mathrm{sign}(e) \max(|e| - d, 0)\f$, so that the integral does not
+ *  build up on the slow natural variability of the flow; the proportional
+ *  term still sees the full error.
+ *
+ *  With `ABL.metmast_integral_deadband_factor` \f$k > 0\f$, each level and
+ *  component sets its own deadband from how much its footprint average
+ *  wanders, \f$d = k \sigma_{avg}\f$. A fast average over
+ *  \f$T_s = T_{avg}/10\f$ has many independent samples within
+ *  \f$T_{avg}\f$, and the variance of an average falls as \f$1/T\f$
+ *  beyond the eddy time scale, so
+ *  \f$\sigma_{avg}^2 = \overline{(\bar{U}_s - \bar{U})^2}\, T_s / T_{avg}\f$,
+ *  filtered over \f$T_{avg}\f$. The estimate needs \f$T_{avg}\f$ of
+ *  data: until then the fixed deadband \f$d_0\f$ is used, and without one
+ *  the integral waits.
  */
 class MetMastForcing : public MomentumSource::Register<MetMastForcing>
 {
@@ -114,6 +131,12 @@ public:
 
     //! Body-force mode footprint standard deviation of a level (global index)
     [[nodiscard]] amrex::Real footprint_sigma(int ilev, int n) const;
+
+    //! Integral deadband in use for a level (global index)
+    [[nodiscard]] amrex::Real integral_deadband(int ilev, int n) const
+    {
+        return m_deadband[(ilev * AMREX_SPACEDIM) + n];
+    }
 
     //! Body-force mode body force of a level (global index)
     [[nodiscard]] amrex::Real body_force(int ilev, int n) const
@@ -219,6 +242,11 @@ private:
     amrex::Real m_min_speed{0.5};
     //! Integral time scale of the controller (0 or negative: no integral)
     amrex::Real m_integral_timescale{-1};
+    //! Errors up to this magnitude are not integrated
+    amrex::Real m_integral_deadband{0};
+    //! Automatic deadband: this many standard deviations of the footprint
+    //! average over the averaging time (0: off)
+    amrex::Real m_deadband_factor{0};
     //! Also force the vertical velocity in body-force mode
     bool m_force_vertical{false};
     //! Largest body force per component in body-force mode (0 or negative:
@@ -236,6 +264,13 @@ private:
     mutable amrex::Vector<amrex::Real> m_second_moment;
     mutable amrex::Vector<amrex::Real> m_integral;
     mutable amrex::Vector<amrex::Real> m_force;
+    //! Automatic deadband: fast footprint average, variance of its departure
+    //! from the footprint average, and the deadband in use
+    mutable amrex::Vector<amrex::Real> m_fast_mean;
+    mutable amrex::Vector<amrex::Real> m_fast_var;
+    mutable amrex::Vector<amrex::Real> m_deadband;
+    //! Time since the controller started (warm-up of the automatic deadband)
+    mutable amrex::Real m_controller_time{0};
     //! Gains of each level in use (fixed or scheduled)
     mutable amrex::Vector<amrex::Real> m_level_tau;
     mutable amrex::Vector<amrex::Real> m_level_ti;

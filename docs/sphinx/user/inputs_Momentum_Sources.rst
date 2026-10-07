@@ -512,6 +512,43 @@ cells inside the terrain are not forced.
    delay the controller by at least the time to fill the terrain features,
    for example 10 minutes.
 
+.. input_param:: ABL.metmast_integral_deadband
+
+   **type:** Real, optional, default = 0.0
+
+   Error in m/s that the integral term of ``body_force`` ignores: only
+   :math:`\mathrm{sign}(e)\max(|e| - d, 0)` is integrated, per velocity
+   component, while the proportional term sees the full error. A footprint
+   average over :input_param:`ABL.metmast_averaging_time` still wanders with
+   the slow eddies of the flow, and the integral would otherwise build up on
+   that wandering and overshoot once the flow turns. Set it to two to three
+   standard deviations of the footprint average over the averaging time, for
+   example of consecutive 10-minute lidar means; in the valley LES test these
+   were 0.1-0.17 m/s near the ground and 0.3 m/s worked. A steady bias
+   smaller than the deadband is not removed, but an average of that length
+   cannot resolve it either. :input_param:`ABL.metmast_integral_deadband_factor`
+   sets it automatically for each gate, with this value as the provisional
+   deadband until its estimate is ready.
+
+.. input_param:: ABL.metmast_integral_deadband_factor
+
+   **type:** Real, optional, default = 0.0
+
+   Sets the integral deadband of each gate and velocity component
+   automatically, as this many standard deviations of its footprint average
+   over :input_param:`ABL.metmast_averaging_time`. The standard deviation is
+   estimated from a fast average over a tenth of the averaging time, which
+   has many independent samples within one averaging time, scaled by the
+   :math:`1/T` decay of the variance of an average:
+   :math:`\sigma^2 = \overline{(\bar{U}_{fast} - \bar{U})^2}/10`. The
+   estimate needs one averaging time of data after the controller starts;
+   until then :input_param:`ABL.metmast_integral_deadband` is used as a
+   provisional deadband, and if it is zero the integral waits. The estimate
+   follows the flow, so the deadband adapts to the height, the stability and
+   changes during the run. A factor of 3 gave 0.2-0.3 m/s near the ground
+   and about 0.1 m/s aloft in the valley LES test, with a provisional
+   0.3 m/s.
+
 .. input_param:: ABL.metmast_gain_schedule
 
    **type:** Boolean, optional, default = false

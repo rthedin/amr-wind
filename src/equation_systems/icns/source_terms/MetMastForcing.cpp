@@ -10,6 +10,8 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <sstream>
+#include <string>
 
 using namespace amrex::literals;
 
@@ -484,6 +486,12 @@ MetMastForcing::MetMastForcing(const CFDSim& sim)
         "positive");
     m_integral_timescale = 4.0_rt * m_timescale;
     pp_abl.query("metmast_integral_timescale", m_integral_timescale);
+    pp_abl.query("metmast_integral_deadband", m_integral_deadband);
+    pp_abl.query("metmast_integral_deadband_factor", m_deadband_factor);
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(
+        (m_integral_deadband >= 0.0_rt) && (m_deadband_factor >= 0.0_rt),
+        "MetMastForcing: integral deadband and its factor must not be "
+        "negative");
     pp_abl.query("metmast_force_vertical", m_force_vertical);
     pp_abl.query("metmast_max_force", m_max_force);
     pp_abl.query("metmast_output_frequency", m_output_frequency);
@@ -501,6 +509,9 @@ MetMastForcing::MetMastForcing(const CFDSim& sim)
     m_second_moment.resize(nvals, 0.0_rt);
     m_integral.resize(nvals, 0.0_rt);
     m_force.resize(nvals, 0.0_rt);
+    m_fast_mean.resize(nvals, 0.0_rt);
+    m_fast_var.resize(nvals, 0.0_rt);
+    m_deadband.resize(nvals, m_integral_deadband);
     m_level_tau.resize(num_levels(), m_timescale);
     m_level_ti.resize(num_levels(), m_integral_timescale);
     copy_to_device(m_force, m_force_d);
@@ -673,6 +684,20 @@ void MetMastForcing::update_body_force(
     const bool advance = m_initialized && (dt > 0.0_rt);
     const amrex::Real alpha =
         advance ? amrex::min(dt / m_averaging_time, 1.0_rt) : 1.0_rt;
+    // Automatic deadband: fast average over T_s = T_avg / 10. The estimate
+    // needs one averaging time of data; until then the fixed deadband is the
+    // provisional one, and without it the integral waits
+    constexpr amrex::Real fast_fraction = 0.1_rt;
+    const bool auto_deadband = m_deadband_factor > 0.0_rt;
+    const amrex::Real alpha_fast =
+        advance ? amrex::min(dt / (fast_fraction * m_averaging_time), 1.0_rt)
+                : 1.0_rt;
+    if (advance) {
+        m_controller_time += dt;
+    }
+    const bool estimate_ready = m_controller_time >= m_averaging_time;
+    const bool integrate = advance && (!auto_deadband || estimate_ready ||
+                                       (m_integral_deadband > 0.0_rt));
     const amrex::Real inv_ti = (m_integral_timescale > 0.0_rt)
                                    ? 1.0_rt / m_integral_timescale
                                    : 0.0_rt;
@@ -692,6 +717,19 @@ void MetMastForcing::update_body_force(
                 sums[(l * nsum) + 1 + AMREX_SPACEDIM + n] / wsum;
             m_footprint_mean[idx] += alpha * (m1 - m_footprint_mean[idx]);
             m_second_moment[idx] += alpha * (m2 - m_second_moment[idx]);
+            m_fast_mean[idx] += alpha_fast * (m1 - m_fast_mean[idx]);
+            const amrex::Real dev = m_fast_mean[idx] - m_footprint_mean[idx];
+            m_fast_var[idx] += alpha * ((dev * dev) - m_fast_var[idx]);
+            // Automatic: the estimate once ready, the fixed deadband before
+            // that if one is given (otherwise the integral waits and the
+            // estimate is reported as it builds up)
+            if (auto_deadband &&
+                (estimate_ready || (m_integral_deadband <= 0.0_rt))) {
+                m_deadband[idx] = m_deadband_factor *
+                                  std::sqrt(m_fast_var[idx] * fast_fraction);
+            } else {
+                m_deadband[idx] = m_integral_deadband;
+            }
         }
 
         // Gains of this level: fixed, or scheduled from the time the air
@@ -721,15 +759,18 @@ void MetMastForcing::update_body_force(
                 continue;
             }
             const amrex::Real err = m_level_vel[idx] - m_footprint_mean[idx];
+            // Only the error beyond the deadband is integrated
+            const amrex::Real err_i = std::copysign(
+                amrex::max(std::abs(err) - m_deadband[idx], 0.0_rt), err);
             if (m_gain_schedule) {
                 // The gains change in time, so integrate the force itself
-                if (advance) {
-                    m_integral[idx] += err * dt * inv_ti_l;
+                if (integrate) {
+                    m_integral[idx] += err_i * dt * inv_ti_l;
                 }
                 m_force[idx] = (err * inv_tau_l) + m_integral[idx];
             } else {
-                if (advance) {
-                    m_integral[idx] += err * dt;
+                if (integrate) {
+                    m_integral[idx] += err_i * dt;
                 }
                 m_force[idx] = (err * inv_tau_l) + (m_integral[idx] * inv_ti_l);
             }
@@ -737,9 +778,9 @@ void MetMastForcing::update_body_force(
                 (std::abs(m_force[idx]) > m_max_force)) {
                 // Saturated: cap the force and stop integrating (anti-windup)
                 m_force[idx] = std::copysign(m_max_force, m_force[idx]);
-                if (advance) {
+                if (integrate) {
                     m_integral[idx] -=
-                        m_gain_schedule ? err * dt * inv_ti_l : err * dt;
+                        m_gain_schedule ? err_i * dt * inv_ti_l : err_i * dt;
                 }
             }
         }
@@ -773,7 +814,7 @@ void MetMastForcing::write_output() const
     if (start) {
         ofh << "# step time station level z obs_u obs_v obs_w obs_su obs_sv "
                "obs_sw mean_u mean_v mean_w sigma_u sigma_v sigma_w force_x "
-               "force_y force_z tau tau_I\n";
+               "force_y force_z tau tau_I deadband_x deadband_y deadband_z\n";
     }
     m_output_started = true;
     ofh << std::setprecision(8);
@@ -796,7 +837,11 @@ void MetMastForcing::write_output() const
             for (int n = 0; n < AMREX_SPACEDIM; ++n) {
                 ofh << " " << body_force(l, n);
             }
-            ofh << " " << m_level_tau[l] << " " << m_level_ti[l] << "\n";
+            ofh << " " << m_level_tau[l] << " " << m_level_ti[l];
+            for (int n = 0; n < AMREX_SPACEDIM; ++n) {
+                ofh << " " << integral_deadband(l, n);
+            }
+            ofh << "\n";
         }
     }
 }
@@ -816,8 +861,10 @@ void MetMastForcing::write_state() const
     ofh << num_levels() << "\n";
     for (int idx = 0; idx < num_levels() * AMREX_SPACEDIM; ++idx) {
         ofh << m_footprint_mean[idx] << " " << m_second_moment[idx] << " "
-            << m_integral[idx] << "\n";
+            << m_integral[idx] << " " << m_fast_mean[idx] << " "
+            << m_fast_var[idx] << "\n";
     }
+    ofh << m_controller_time << "\n";
 }
 
 void MetMastForcing::read_state(const std::string& fname) const
@@ -832,11 +879,23 @@ void MetMastForcing::read_state(const std::string& fname) const
             "MetMastForcing: state file " + fname +
             " does not match the station levels");
     }
+    std::string line;
+    std::getline(ifh, line);
     for (int idx = 0; idx < num_levels() * AMREX_SPACEDIM; ++idx) {
-        if (!(ifh >> m_footprint_mean[idx] >> m_second_moment[idx] >>
+        std::getline(ifh, line);
+        std::istringstream iss(line);
+        if (!(iss >> m_footprint_mean[idx] >> m_second_moment[idx] >>
               m_integral[idx])) {
             amrex::Abort("MetMastForcing: cannot parse state file " + fname);
         }
+        // Files from before the automatic deadband: start its estimate anew
+        if (!(iss >> m_fast_mean[idx] >> m_fast_var[idx])) {
+            m_fast_mean[idx] = m_footprint_mean[idx];
+            m_fast_var[idx] = 0.0_rt;
+        }
+    }
+    if (!(ifh >> m_controller_time)) {
+        m_controller_time = 0.0_rt;
     }
     m_initialized = true;
 }
