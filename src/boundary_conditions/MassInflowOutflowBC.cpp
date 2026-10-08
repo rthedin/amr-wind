@@ -1,6 +1,8 @@
 #include "src/boundary_conditions/MassInflowOutflowBC.H"
 #include "AMReX_ParmParse.H"
 
+using namespace amrex::literals;
+
 namespace kynema_sgf {
 
 MassInflowOutflowBC::MassInflowOutflowBC(Field& field, amrex::Orientation ori)
@@ -9,6 +11,8 @@ MassInflowOutflowBC::MassInflowOutflowBC(Field& field, amrex::Orientation ori)
     // BC bug study 2026-10-07
     amrex::ParmParse pp("incflo");
     pp.query("inout_consistent_ghosts", m_consistent_ghosts);
+    amrex::ParmParse pp_eq("ICNS");
+    pp_eq.query("clip_inout_backflow", m_clip_backflow);
 }
 
 void MassInflowOutflowBC::operator()(
@@ -22,6 +26,8 @@ void MassInflowOutflowBC::operator()(
     const int ncomp = field.num_comp();
     const int idim = m_ori.coordDir();
     const int ng = m_consistent_ghosts ? field.num_grow()[idim] : 1;
+    // BC bug study 2026-10-07: clip the normal velocity ghost to no re-entry
+    const bool clip = m_clip_backflow && (field.base_name() == "velocity");
     const auto islow = m_ori.isLow();
     const auto ishigh = m_ori.isHigh();
     const int nlevels = m_field.repo().num_active_levels();
@@ -60,6 +66,12 @@ void MassInflowOutflowBC::operator()(
                                     bc_a(ivg[0], ivg[1], ivg[2], n) =
                                         bc_a(i, j, k, n);
                                 }
+                                if (clip) {
+                                    bc_a(ivg[0], ivg[1], ivg[2], idim) =
+                                        amrex::min(
+                                            bc_a(ivg[0], ivg[1], ivg[2], idim),
+                                            0.0_rt);
+                                }
                             }
                         }
                     });
@@ -77,6 +89,12 @@ void MassInflowOutflowBC::operator()(
                                 for (int n = 0; n < ncomp; n++) {
                                     bc_a(ivg[0], ivg[1], ivg[2], n) =
                                         bc_a(ivm[0], ivm[1], ivm[2], n);
+                                }
+                                if (clip) {
+                                    bc_a(ivg[0], ivg[1], ivg[2], idim) =
+                                        amrex::max(
+                                            bc_a(ivg[0], ivg[1], ivg[2], idim),
+                                            0.0_rt);
                                 }
                             }
                         }

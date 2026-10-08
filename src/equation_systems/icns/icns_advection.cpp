@@ -59,6 +59,9 @@ MacProjOp::MacProjOp(
 {
     amrex::ParmParse pp("incflo");
     pp.query("density", m_rho_0);
+    // BC bug study 2026-10-07
+    amrex::ParmParse pp_eq("ICNS");
+    pp_eq.query("clip_inout_backflow", m_clip_inout_backflow);
 #ifdef KYNEMA_SGF_USE_FFT
     {
         amrex::ParmParse pp("mac_proj");
@@ -75,6 +78,52 @@ void MacProjOp::enforce_inout_solvability(
     const amrex::Vector<amrex::Geometry>& geom = m_repo.mesh().Geom();
 
     HydroUtils::enforceInOutSolvability(a_umac, bc_type, geom);
+}
+
+// BC bug study 2026-10-07: on a mass_inflow_outflow face, where the plane
+// (ghost) normal velocity points outward, the predicted MAC face velocity is
+// clipped to max(u_mac, 0) on a hi face and min(u_mac, 0) on a lo face
+void MacProjOp::clip_inout_backflow(
+    const amrex::Vector<amrex::Array<amrex::MultiFab*, AMREX_SPACEDIM>>& a_umac)
+{
+    const auto& velocity = m_repo.get_field("velocity");
+    const auto& bctype = velocity.bc_type();
+    for (int lev = 0; lev < m_repo.num_active_levels(); ++lev) {
+        const auto& domain = m_repo.mesh().Geom(lev).Domain();
+        for (amrex::OrientationIter oit; oit != nullptr; ++oit) {
+            const auto ori = oit();
+            if (bctype[ori] != BC::mass_inflow_outflow) {
+                continue;
+            }
+            const int idim = ori.coordDir();
+            const bool islow = ori.isLow();
+            const amrex::IntVect iv_dir = {
+                static_cast<int>(idim == 0), static_cast<int>(idim == 1),
+                static_cast<int>(idim == 2)};
+            const amrex::Box dom_face = amrex::bdryNode(domain, ori);
+            for (amrex::MFIter mfi(*a_umac[lev][idim]); mfi.isValid(); ++mfi) {
+                const amrex::Box fbx = mfi.validbox() & dom_face;
+                if (!fbx.ok()) {
+                    continue;
+                }
+                const auto& umac = a_umac[lev][idim]->array(mfi);
+                const auto& vel = velocity(lev).const_array(mfi);
+                amrex::ParallelFor(
+                    fbx, [=] AMREX_GPU_DEVICE(int i, int j, int k) {
+                        const amrex::IntVect iv = {i, j, k};
+                        const amrex::IntVect ivg = islow ? iv - iv_dir : iv;
+                        const amrex::Real ug =
+                            vel(ivg[0], ivg[1], ivg[2], idim);
+                        if (islow && (ug < 0)) {
+                            umac(i, j, k) = amrex::min(umac(i, j, k), 0.0_rt);
+                        }
+                        if (!islow && (ug > 0)) {
+                            umac(i, j, k) = amrex::max(umac(i, j, k), 0.0_rt);
+                        }
+                    });
+            }
+        }
+    }
 }
 
 void MacProjOp::init_projector(const MacProjOp::FaceFabPtrVec& beta)
@@ -316,6 +365,10 @@ void MacProjOp::operator()(const FieldState fstate, const amrex::Real dt)
 
     const bool has_inout_bndry =
         (m_repo.get_field("velocity")).has_inout_bndry();
+    // BC bug study 2026-10-07: clip before the solvability scaling
+    if (has_inout_bndry && m_clip_inout_backflow) {
+        clip_inout_backflow(mac_vec);
+    }
     if (has_inout_bndry) {
         enforce_inout_solvability(mac_vec);
     }

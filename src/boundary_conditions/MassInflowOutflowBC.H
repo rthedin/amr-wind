@@ -26,6 +26,9 @@ private:
 
     //! BC bug study 2026-10-07: copy into all normal ghost layers
     bool m_consistent_ghosts{false};
+
+    //! BC bug study 2026-10-07: no re-entry through outflow cells (velocity)
+    bool m_clip_backflow{false};
 };
 
 } // namespace kynema_sgf
