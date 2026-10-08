@@ -6,6 +6,10 @@
 #include "AMReX_ParmParse.H"
 #include "AMReX_REAL.H"
 
+#include <fstream>
+#include <sstream>
+#include <string>
+
 using namespace amrex::literals;
 
 namespace kynema_sgf::pde::icns {
@@ -73,7 +77,10 @@ ABLMeanBoussinesq::ABLMeanBoussinesq(const CFDSim& sim)
         pp_boussinesq_buoyancy.get("tprofile_filename", tprofile_filename);
     }
 
-    if ((read_temp_prof) && (tprofile_filename.empty())) {
+    // BC bug study 2026-10-07: read the profile file whenever a filename is
+    // given (the old condition read it only when the filename was EMPTY, so the
+    // live plane mean was used although the input named a file)
+    if (read_temp_prof && !tprofile_filename.empty()) {
         m_const_profile = true;
         read_temperature_profile(tprofile_filename);
     } else {
@@ -160,17 +167,31 @@ void ABLMeanBoussinesq::read_temperature_profile(
 
     amrex::Vector<amrex::Real> theta_ht, theta_vals;
     std::ifstream infile;
-    int n_hts;
     infile.open(profile_file_name.c_str(), std::ios_base::in);
-    infile >> n_hts;
-    theta_ht.resize(n_hts);
-    theta_vals.resize(n_hts);
-    m_theta_ht.resize(n_hts);
-    m_theta_vals.resize(n_hts);
-    for (int i = 0; i < n_hts; i++) {
-        infile >> theta_ht[i] >> theta_vals[i];
+    // BC bug study 2026-10-07: accept both formats, a leading count line
+    // followed by "height theta" lines, or "height theta" lines only
+    std::string line;
+    while (std::getline(infile, line)) {
+        std::istringstream iss(line);
+        amrex::Real ht = 0.0_rt, val = 0.0_rt;
+        if (!(iss >> ht)) {
+            continue;
+        }
+        if (!(iss >> val)) {
+            continue;
+        }
+        theta_ht.push_back(ht);
+        theta_vals.push_back(val);
     }
     infile.close();
+    if (theta_ht.empty()) {
+        amrex::Abort(
+            "ABLMeanBoussinesq: no (height, theta) pairs read from " +
+            profile_file_name);
+    }
+    const int n_hts = static_cast<int>(theta_ht.size());
+    m_theta_ht.resize(n_hts);
+    m_theta_vals.resize(n_hts);
 
     // Now copy to GPU Device memory
     amrex::Gpu::copy(
