@@ -52,6 +52,8 @@ void incflo::ReadParameters()
         amrex::ParmParse pp("incflo");
 
         pp.query("verbose", m_verbose);
+        // BC bug study 2026-10-07
+        pp.query("inout_consistent_ghosts", m_inout_consistent_ghosts);
 
         pp.query("initial_iterations", m_initial_iterations);
         pp.query("do_initial_proj", m_do_initial_proj);

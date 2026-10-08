@@ -23,6 +23,9 @@ private:
     Field& m_field;
 
     amrex::Orientation m_ori;
+
+    //! BC bug study 2026-10-07: copy into all normal ghost layers
+    bool m_consistent_ghosts{false};
 };
 
 } // namespace kynema_sgf

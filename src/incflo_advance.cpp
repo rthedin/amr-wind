@@ -218,6 +218,16 @@ void incflo::ApplyPredictor(
             icns().fields().field.num_grow());
     }
 
+    // BC bug study 2026-10-07: give the SGS model and the Godunov stencil the
+    // interior-copy ghost at mio outflow cells that the projection already uses
+    if (m_inout_consistent_ghosts && velocity_new.has_inout_bndry()) {
+        velocity_old.apply_bc_funcs(kynema_sgf::FieldState::Old);
+        if (m_repo.field_exists("temperature")) {
+            m_repo.get_field("temperature", kynema_sgf::FieldState::Old)
+                .apply_bc_funcs(kynema_sgf::FieldState::Old);
+        }
+    }
+
     // *************************************************************************************
     // Compute viscosity / diffusive coefficients
     // *************************************************************************************
