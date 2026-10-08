@@ -3,6 +3,7 @@
 #include "src/incflo.H"
 #include "src/core/Physics.H"
 #include "src/core/field_ops.H"
+#include "src/boundary_conditions/MassInflowOutflowBC.H"
 #include "src/equation_systems/PDEBase.H"
 #include "src/turbulence/TurbulenceModel.H"
 #include "src/utilities/console_io.H"
@@ -219,12 +220,27 @@ void incflo::ApplyPredictor(
     }
 
     // BC bug study 2026-10-07: give the SGS model and the Godunov stencil the
-    // interior-copy ghost at mio outflow cells that the projection already uses
+    // interior-copy ghost at mio outflow cells that the projection already
+    // uses. Only the mass_inflow_outflow functors are applied: apply_bc_funcs
+    // would also run the wall-model and fixed-gradient functors, whose ghost
+    // values are gradients meant for the diffusion solver (NaN where the
+    // blanked bottom cells have zero wind), not states.
     if (m_inout_consistent_ghosts && velocity_new.has_inout_bndry()) {
-        velocity_old.apply_bc_funcs(kynema_sgf::FieldState::Old);
-        if (m_repo.field_exists("temperature")) {
-            m_repo.get_field("temperature", kynema_sgf::FieldState::Old)
-                .apply_bc_funcs(kynema_sgf::FieldState::Old);
+        const bool has_temp = m_repo.field_exists("temperature");
+        for (amrex::OrientationIter oit; oit != nullptr; ++oit) {
+            const auto ori = oit();
+            if (velocity_new.bc_type()[ori] == BC::mass_inflow_outflow) {
+                kynema_sgf::MassInflowOutflowBC(velocity_new, ori)(
+                    velocity_old, kynema_sgf::FieldState::Old);
+            }
+            if (has_temp) {
+                auto& temp_new = m_repo.get_field("temperature");
+                if (temp_new.bc_type()[ori] == BC::mass_inflow_outflow) {
+                    kynema_sgf::MassInflowOutflowBC(temp_new, ori)(
+                        temp_new.state(kynema_sgf::FieldState::Old),
+                        kynema_sgf::FieldState::Old);
+                }
+            }
         }
     }
 
