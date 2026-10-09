@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <fstream>
 #include "ks_test_utils/MeshTest.H"
@@ -93,6 +94,7 @@ protected:
         auto& time = sim().time();
         time.new_timestep();
         time.set_current_cfl(2.0_rt, 0.0_rt, 0.0_rt);
+        time.advance_time();
     }
 
     // One lidar gate at the cell (8, 8, 3) center, in body-force mode
@@ -422,6 +424,339 @@ TEST_F(MetMastTest, body_force_averaging_radius)
     EXPECT_NEAR(
         probe(10, 8, 3, 0), -2.0_rt / m_tau * std::exp(-0.25_rt * 0.04_rt),
         m_tol);
+}
+
+TEST_F(MetMastTest, body_force_gate_length)
+{
+    setup_mean_gate("lidar_gate_length.txt");
+    setup_sim();
+    // Faster layer in the gate's own cells (k = 3, z = 87.5 m)
+    set_velocity({5.0_rt, 0.0_rt, 0.0_rt});
+    const amrex::Box layer(amrex::IntVect(0, 0, 3), amrex::IntVect(15, 15, 3));
+    sim()
+        .repo()
+        .get_field("velocity")
+        .state(kynema_sgf::FieldState::Old)(0)
+        .setVal(9.0_rt, layer, 0, 1);
+
+    // Default: the vertical forcing weights also average the layers around
+    {
+        kynema_sgf::pde::icns::MetMastForcing forcing(sim());
+        evaluate(forcing);
+        EXPECT_LT(forcing.footprint_velocity(0, 0), 8.0_rt);
+    }
+    // A 40 m range gate on 25 m cells averages the gate's own layer only;
+    // the next layers are 25 m away
+    {
+        amrex::ParmParse pp("ABL");
+        pp.add("metmast_gate_length", 40.0_rt);
+        kynema_sgf::pde::icns::MetMastForcing forcing(sim());
+        evaluate(forcing);
+        EXPECT_NEAR(forcing.footprint_velocity(0, 0), 9.0_rt, m_tol);
+        EXPECT_NEAR(forcing.body_force(0, 0), -2.0_rt / m_tau, m_tol);
+    }
+}
+
+TEST_F(MetMastTest, body_force_monitor)
+{
+    setup_mean_gate("lidar_monitor.txt");
+    {
+        amrex::ParmParse pp("ABL");
+        pp.add("metmast_forcing_type", std::string("monitor"));
+    }
+    setup_sim();
+    set_velocity({5.0_rt, 1.0_rt, 0.0_rt});
+    kynema_sgf::pde::icns::MetMastForcing forcing(sim());
+    evaluate(forcing);
+    next_step();
+    evaluate(forcing);
+
+    // The footprint average is computed, but no force is applied
+    EXPECT_NEAR(forcing.footprint_velocity(0, 0), 5.0_rt, m_tol);
+    EXPECT_NEAR(forcing.footprint_velocity(0, 1), 1.0_rt, m_tol);
+    EXPECT_NEAR(forcing.body_force(0, 0), 0.0_rt, m_tol);
+    EXPECT_NEAR(utils::field_max(src_term(), 0), 0.0_rt, m_tol);
+    EXPECT_NEAR(utils::field_min(src_term(), 0), 0.0_rt, m_tol);
+}
+
+TEST_F(MetMastTest, body_force_gain_schedule)
+{
+    setup_mean_gate("lidar_schedule.txt");
+    {
+        amrex::ParmParse pp("ABL");
+        pp.add("metmast_gain_schedule", true);
+    }
+    setup_sim();
+    set_velocity({5.0_rt, 0.0_rt, 0.0_rt});
+    kynema_sgf::pde::icns::MetMastForcing forcing(sim());
+    evaluate(forcing);
+
+    // T_p = R_h / U = 500 / 5 s, tau_I = 2 T_p (T_avg + T_p), tau = tau_I / 10
+    const amrex::Real tp = 100.0_rt;
+    const amrex::Real ti = 2.0_rt * tp * (120.0_rt + tp);
+    EXPECT_NEAR(forcing.level_integral_timescale(0), ti, 1.0e3_rt * m_tol);
+    EXPECT_NEAR(forcing.level_timescale(0), ti / 10.0_rt, 1.0e2_rt * m_tol);
+    EXPECT_NEAR(forcing.body_force(0, 0), 2.0_rt * 10.0_rt / ti, m_tol);
+    EXPECT_NEAR(probe(8, 8, 3, 0), 2.0_rt * 10.0_rt / ti, m_tol);
+}
+
+TEST_F(MetMastTest, body_force_gain_schedule_floor)
+{
+    setup_mean_gate("lidar_schedule_floor.txt");
+    {
+        amrex::ParmParse pp("ABL");
+        pp.add("metmast_gain_schedule", true);
+    }
+    setup_sim();
+    set_velocity({0.1_rt, 0.0_rt, 0.0_rt});
+    kynema_sgf::pde::icns::MetMastForcing forcing(sim());
+    evaluate(forcing);
+
+    // Nearly stagnant air: the speed is floored at 0.5 m/s
+    const amrex::Real tp = 500.0_rt / 0.5_rt;
+    const amrex::Real ti = 2.0_rt * tp * (120.0_rt + tp);
+    EXPECT_NEAR(forcing.level_integral_timescale(0), ti, 1.0e5_rt * m_tol);
+    EXPECT_NEAR(
+        forcing.body_force(0, 0), (7.0_rt - 0.1_rt) * 10.0_rt / ti, m_tol);
+}
+
+TEST_F(MetMastTest, body_force_gain_schedule_integral)
+{
+    setup_mean_gate("lidar_schedule_integral.txt");
+    {
+        amrex::ParmParse pp("ABL");
+        pp.add("metmast_gain_schedule", true);
+        // No time filter, so the gains follow the velocity immediately
+        pp.add("metmast_averaging_time", 1.0e-3_rt);
+    }
+    setup_sim();
+    set_velocity({5.0_rt, 0.0_rt, 0.0_rt});
+    kynema_sgf::pde::icns::MetMastForcing forcing(sim());
+    evaluate(forcing);
+    next_step();
+    const amrex::Real dt = sim().time().delta_t();
+    evaluate(forcing);
+    next_step();
+    set_velocity({10.0_rt, 0.0_rt, 0.0_rt});
+    evaluate(forcing);
+
+    // The integral is a force: each step adds err dt / tau_I of that step,
+    // so a change of gains does not rescale the past
+    const amrex::Real ti1 = 2.0_rt * 100.0_rt * (1.0e-3_rt + 100.0_rt);
+    const amrex::Real ti2 = 2.0_rt * 50.0_rt * (1.0e-3_rt + 50.0_rt);
+    const amrex::Real integ = (2.0_rt * dt / ti1) + (-3.0_rt * dt / ti2);
+    EXPECT_NEAR(
+        forcing.body_force(0, 0), (-3.0_rt * 10.0_rt / ti2) + integ, m_tol);
+}
+
+TEST_F(MetMastTest, body_force_integral_deadband)
+{
+    setup_mean_gate("lidar_deadband.txt");
+    {
+        amrex::ParmParse pp("ABL");
+        pp.add("metmast_integral_deadband", 1.5_rt);
+        // No time filter, so the error follows the velocity immediately
+        pp.add("metmast_averaging_time", 1.0e-3_rt);
+    }
+    setup_sim();
+    set_velocity({5.0_rt, 1.0_rt, 0.0_rt});
+    kynema_sgf::pde::icns::MetMastForcing forcing(sim());
+    evaluate(forcing);
+    next_step();
+    const amrex::Real dt1 = sim().time().delta_t();
+    evaluate(forcing);
+
+    // Errors 2 (u) and 1 (v): the proportional term sees the full error, the
+    // integral only the part beyond the deadband, none of v
+    const amrex::Real ti = 4.0_rt * m_tau;
+    EXPECT_NEAR(
+        forcing.body_force(0, 0), (2.0_rt / m_tau) + (0.5_rt * dt1 / ti),
+        m_tol);
+    EXPECT_NEAR(forcing.body_force(0, 1), 1.0_rt / m_tau, m_tol);
+
+    // Negative errors are cut symmetrically: error -2 integrates -0.5
+    next_step();
+    const amrex::Real dt2 = sim().time().delta_t();
+    set_velocity({9.0_rt, 1.0_rt, 0.0_rt});
+    evaluate(forcing);
+    EXPECT_NEAR(forcing.footprint_velocity(0, 0), 9.0_rt, m_tol);
+    EXPECT_NEAR(
+        forcing.body_force(0, 0),
+        (-2.0_rt / m_tau) + (0.5_rt * (dt1 - dt2) / ti), m_tol);
+}
+
+TEST_F(MetMastTest, body_force_auto_deadband)
+{
+    setup_mean_gate("lidar_auto_deadband.txt");
+    const amrex::Real tavg = 0.2_rt;
+    const amrex::Real provisional = 0.05_rt;
+    {
+        amrex::ParmParse pp("ABL");
+        pp.add("metmast_integral_deadband_factor", 3.0_rt);
+        pp.add("metmast_integral_deadband", provisional);
+        pp.add("metmast_averaging_time", tavg);
+    }
+    setup_sim();
+    kynema_sgf::pde::icns::MetMastForcing forcing(sim());
+
+    // The same filters, deadband and warm-up as the controller
+    const amrex::Real ti = 4.0_rt * m_tau;
+    amrex::Real mean = 0.0_rt;
+    amrex::Real fast = 0.0_rt;
+    amrex::Real var = 0.0_rt;
+    amrex::Real integ = 0.0_rt;
+    amrex::Real elapsed = 0.0_rt;
+    int nwarm = 0;
+    int nint = 0;
+    for (int step = 0; elapsed < 3.0_rt * tavg; ++step) {
+        ASSERT_LT(step, 500);
+        // A wandering footprint: u alternates around 5, v sits on the target
+        const amrex::Real u = (step % 2 == 0) ? 4.0_rt : 6.5_rt;
+        set_velocity({u, 2.0_rt, 0.0_rt});
+        if (step == 0) {
+            mean = u;
+            fast = u;
+        } else {
+            next_step();
+            const amrex::Real dt = sim().time().delta_t();
+            const amrex::Real a = std::min(dt / tavg, 1.0_rt);
+            const amrex::Real af = std::min(dt / (0.1_rt * tavg), 1.0_rt);
+            elapsed += dt;
+            mean += a * (u - mean);
+            fast += af * (u - fast);
+            var += a * (((fast - mean) * (fast - mean)) - var);
+        }
+        evaluate(forcing);
+        // The fixed deadband is provisional until the estimate has one
+        // averaging time of data
+        const bool ready = elapsed >= tavg;
+        const amrex::Real d =
+            ready ? 3.0_rt * std::sqrt(var * 0.1_rt) : provisional;
+        const amrex::Real err = 7.0_rt - mean;
+        if (step > 0) {
+            integ += std::copysign(std::max(std::abs(err) - d, 0.0_rt), err) *
+                     sim().time().delta_t();
+        }
+        if (ready) {
+            ++nint;
+        } else {
+            ++nwarm;
+        }
+        EXPECT_NEAR(forcing.integral_deadband(0, 0), d, m_tol);
+        // No wander in v: no deadband once the estimate is ready
+        EXPECT_NEAR(
+            forcing.integral_deadband(0, 1), ready ? 0.0_rt : provisional,
+            m_tol);
+        EXPECT_NEAR(
+            forcing.body_force(0, 0), (err / m_tau) + (integ / ti), m_tol);
+    }
+    // Both the provisional and the automatic deadband were exercised
+    EXPECT_GT(nwarm, 1);
+    EXPECT_GT(nint, 1);
+    EXPECT_GT(forcing.integral_deadband(0, 0), 2.0_rt * provisional);
+}
+
+TEST_F(MetMastTest, body_force_auto_deadband_restart)
+{
+    write_file(
+        "metmast_state_auto.txt",
+        "1\n"
+        "6 37 10 5.5 0.4\n"
+        "1 2 0 1 0\n"
+        "0 0 0 0 0\n"
+        "0.3\n");
+    setup_mean_gate("lidar_auto_restart.txt");
+    {
+        amrex::ParmParse pp("ABL");
+        pp.add("metmast_restart_state", std::string("metmast_state_auto.txt"));
+        pp.add("metmast_integral_deadband_factor", 3.0_rt);
+    }
+    setup_sim();
+    set_velocity({5.0_rt, 0.0_rt, 0.0_rt});
+    next_step();
+    const amrex::Real dt = sim().time().delta_t();
+    kynema_sgf::pde::icns::MetMastForcing forcing(sim());
+    evaluate(forcing);
+
+    // The fast average, its variance and the warm-up clock continue from the
+    // saved state; still in the warm-up, so the integral is unchanged
+    const amrex::Real a = dt / 120.0_rt;
+    const amrex::Real af = dt / 12.0_rt;
+    const amrex::Real mean = 6.0_rt + (a * (5.0_rt - 6.0_rt));
+    const amrex::Real fast = 5.5_rt + (af * (5.0_rt - 5.5_rt));
+    const amrex::Real var =
+        0.4_rt + (a * (((fast - mean) * (fast - mean)) - 0.4_rt));
+    EXPECT_NEAR(
+        forcing.integral_deadband(0, 0), 3.0_rt * std::sqrt(var * 0.1_rt),
+        m_tol);
+    EXPECT_NEAR(
+        forcing.body_force(0, 0),
+        ((7.0_rt - mean) / m_tau) + (10.0_rt / (4.0_rt * m_tau)), m_tol);
+}
+
+TEST_F(MetMastTest, body_force_start_time)
+{
+    setup_mean_gate("lidar_start_time.txt");
+    {
+        amrex::ParmParse pp("ABL");
+        pp.add("metmast_start_time", 0.25_rt);
+    }
+    setup_sim();
+    // Spin-up transient: an empty footprint
+    set_velocity({0.0_rt, 0.0_rt, 0.0_rt});
+    kynema_sgf::pde::icns::MetMastForcing forcing(sim());
+    auto& time = sim().time();
+    int nsteps = 0;
+    while (time.current_time() < 0.25_rt) {
+        evaluate(forcing);
+        // Not started: no force and no average
+        EXPECT_NEAR(forcing.body_force(0, 0), 0.0_rt, m_tol);
+        EXPECT_NEAR(utils::field_max(src_term(), 0), 0.0_rt, m_tol);
+        EXPECT_NEAR(forcing.footprint_velocity(0, 0), 0.0_rt, m_tol);
+        next_step();
+        ASSERT_LT(++nsteps, 100);
+    }
+    EXPECT_GT(nsteps, 0);
+
+    // First update after the start: the filter starts from the current flow,
+    // not from the transient, and the integral from zero
+    set_velocity({5.0_rt, 0.0_rt, 0.0_rt});
+    evaluate(forcing);
+    EXPECT_NEAR(forcing.footprint_velocity(0, 0), 5.0_rt, m_tol);
+    EXPECT_NEAR(forcing.body_force(0, 0), 2.0_rt / m_tau, m_tol);
+}
+
+TEST_F(MetMastTest, body_force_start_delay)
+{
+    setup_mean_gate("lidar_start_delay.txt");
+    {
+        amrex::ParmParse pp("ABL");
+        pp.add("metmast_start_delay", 0.25_rt);
+    }
+    setup_sim();
+    // Start the run at a later time, as after a restart
+    auto& time = sim().time();
+    for (int n = 0; n < 5; ++n) {
+        next_step();
+    }
+    const amrex::Real t_first = time.current_time();
+    ASSERT_GT(t_first, 0.25_rt);
+    set_velocity({0.0_rt, 0.0_rt, 0.0_rt});
+    kynema_sgf::pde::icns::MetMastForcing forcing(sim());
+    int nsteps = 0;
+    while (time.current_time() < t_first + 0.25_rt) {
+        evaluate(forcing);
+        // The delay counts from the first step of this run
+        EXPECT_NEAR(forcing.body_force(0, 0), 0.0_rt, m_tol);
+        EXPECT_NEAR(forcing.footprint_velocity(0, 0), 0.0_rt, m_tol);
+        next_step();
+        ASSERT_LT(++nsteps, 100);
+    }
+    EXPECT_GT(nsteps, 1);
+    set_velocity({5.0_rt, 0.0_rt, 0.0_rt});
+    evaluate(forcing);
+    EXPECT_NEAR(forcing.footprint_velocity(0, 0), 5.0_rt, m_tol);
+    EXPECT_NEAR(forcing.body_force(0, 0), 2.0_rt / m_tau, m_tol);
 }
 
 TEST_F(MetMastTest, body_force_terrain)

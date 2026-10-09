@@ -409,7 +409,7 @@ cells inside the terrain are not forced.
 
 .. input_param:: ABL.metmast_forcing_type
 
-   **type:** String, optional, default = relaxation
+   **type:** String, optional, default = relaxation (or body_force, monitor)
 
    ``relaxation`` pulls each cell's own velocity towards the measurements as
    described above. In LES this
@@ -448,6 +448,20 @@ cells inside the terrain are not forced.
    differences should be corrected through the inflow or the large-scale
    forcing instead.
 
+   ``monitor`` computes and writes the footprint averages like ``body_force``
+   but applies no force. It gives the model's virtual-lidar values, for
+   example to compare a run with lidar data or to build a target with the same
+   averaging as the controller.
+
+   The controller is a loop with lags: the time filter :math:`T_{avg}` and the
+   time :math:`\tau_d` for the forced air to reach the lidar. Air stays in the
+   footprint for about :math:`T_p \approx R_h / U`, which is the gain of the
+   force on the footprint average. For a stable loop, keep the integral slow
+   compared with these lags, :math:`\tau_I \gtrsim 2 T_p (T_{avg} + \tau_d)`.
+   In LES, an averaging time shorter than the large-eddy time scale (several
+   minutes) makes the controller follow individual large eddies and add slow
+   variability; average over about the lidar averaging period instead.
+
 .. input_param:: ABL.metmast_averaging_time
 
    **type:** Real, optional, default = 120.0
@@ -463,6 +477,118 @@ cells inside the terrain are not forced.
    measurement volume makes the controller hold the velocity at the lidar
    while the force is still spread over
    :input_param:`ABL.metmast_horizontal_radius`.
+
+.. input_param:: ABL.metmast_gate_length
+
+   **type:** Real, optional, default = 0.0
+
+   Range-gate length of the footprint average in meters. When positive, each
+   gate averages only the cells within half this length of its height, like a
+   lidar range gate. When zero, the average uses the forcing weights, which
+   interpolate between gates and taper above and below the end gates; that
+   biases the end gates towards the flow outside the measured range. Use a
+   length of at least the cell height, so that every gate contains cells.
+
+.. input_param:: ABL.metmast_start_time
+
+   **type:** Real, optional, default = 0.0
+
+   Simulation time in seconds from which the footprint averages and the force
+   start. Before it the body force is zero and nothing is averaged; at the
+   first update after it the time filter starts from the current footprint
+   average and the integral from zero. Use it to start the controller after
+   the flow has spun up, for example after a restart from a precursor, so that
+   the controller does not integrate the spin-up transient.
+
+.. input_param:: ABL.metmast_start_delay
+
+   **type:** Real, optional, default = 0.0
+
+   Delay in seconds after the first step of the run, a fresh start or a
+   restart, before the footprint averages and the force start, with the same
+   start as :input_param:`ABL.metmast_start_time`; the later of the two
+   applies. Immersed-terrain runs usually start from a flat simulation mapped
+   onto the terrain, so the flow in and around the terrain spins up first;
+   delay the controller by at least the time to fill the terrain features,
+   for example 10 minutes.
+
+.. input_param:: ABL.metmast_integral_deadband
+
+   **type:** Real, optional, default = 0.0
+
+   Error in m/s that the integral term of ``body_force`` ignores: only
+   :math:`\mathrm{sign}(e)\max(|e| - d, 0)` is integrated, per velocity
+   component, while the proportional term sees the full error. A footprint
+   average over :input_param:`ABL.metmast_averaging_time` still wanders with
+   the slow eddies of the flow, and the integral would otherwise build up on
+   that wandering and overshoot once the flow turns. Set it to two to three
+   standard deviations of the footprint average over the averaging time, for
+   example of consecutive 10-minute lidar means; in the valley LES test these
+   were 0.1-0.17 m/s near the ground and 0.3 m/s worked. A steady bias
+   smaller than the deadband is not removed, but an average of that length
+   cannot resolve it either. :input_param:`ABL.metmast_integral_deadband_factor`
+   sets it automatically for each gate, with this value as the provisional
+   deadband until its estimate is ready.
+
+.. input_param:: ABL.metmast_integral_deadband_factor
+
+   **type:** Real, optional, default = 0.0
+
+   Sets the integral deadband of each gate and velocity component
+   automatically, as this many standard deviations of its footprint average
+   over :input_param:`ABL.metmast_averaging_time`. The standard deviation is
+   estimated from a fast average over a tenth of the averaging time, which
+   has many independent samples within one averaging time, scaled by the
+   :math:`1/T` decay of the variance of an average:
+   :math:`\sigma^2 = \overline{(\bar{U}_{fast} - \bar{U})^2}/10`. The
+   estimate needs one averaging time of data after the controller starts;
+   until then :input_param:`ABL.metmast_integral_deadband` is used as a
+   provisional deadband, and if it is zero the integral waits. The estimate
+   follows the flow, so the deadband adapts to the height, the stability and
+   changes during the run. A factor of 3 gave 0.2-0.3 m/s near the ground
+   and about 0.1 m/s aloft in the valley LES test, with a provisional
+   0.3 m/s.
+
+.. input_param:: ABL.metmast_gain_schedule
+
+   **type:** Boolean, optional, default = false
+
+   Set the gains of each gate from the local flow instead of
+   :input_param:`ABL.metmast_timescale` and
+   :input_param:`ABL.metmast_integral_timescale`. With the filtered
+   footprint speed :math:`U` (at least :input_param:`ABL.metmast_min_speed`),
+   the air spends :math:`T_p = R_h / U` under the force, which is also taken
+   as the delay, and
+
+   .. math::
+
+      \tau_I = k_I \, T_p \, (T_{avg} + T_p), \qquad \tau = \tau_I / r
+
+   with :math:`k_I` = :input_param:`ABL.metmast_integral_factor` and
+   :math:`r` = :input_param:`ABL.metmast_integral_ratio`. Slow air, which a
+   force accelerates the most, gets the gentlest gains. The integral is kept as
+   a force, so changing gains do not rescale its past. The gains in use are
+   written as the last two columns of the output file.
+
+.. input_param:: ABL.metmast_integral_factor
+
+   **type:** Real, optional, default = 2.0
+
+   :math:`k_I` of the gain schedule. About 2 gives a phase margin near
+   60 degrees; larger is slower and more robust.
+
+.. input_param:: ABL.metmast_integral_ratio
+
+   **type:** Real, optional, default = 10.0
+
+   Ratio :math:`\tau_I / \tau` of the gain schedule.
+
+.. input_param:: ABL.metmast_min_speed
+
+   **type:** Real, optional, default = 0.5
+
+   Smallest footprint speed in m/s used by the gain schedule, which bounds the
+   residence time in nearly stagnant air.
 
 .. input_param:: ABL.metmast_integral_timescale
 

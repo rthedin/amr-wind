@@ -63,6 +63,41 @@ struct ForcingParams;
  *  on the local velocity, so it shifts the mean without damping the
  *  fluctuations. The vertical component is only forced with
  *  `ABL.metmast_force_vertical = true`.
+ *
+ *  With `ABL.metmast_gate_length`, each gate averages only the cells within
+ *  half the gate length of its height, like a lidar range gate, instead of the
+ *  forcing weights and their taper beyond the end gates.
+ *  `ABL.metmast_forcing_type = monitor` computes and writes the footprint
+ *  averages without applying any force.
+ *
+ *  With `ABL.metmast_gain_schedule = true`, each level sets its own gains
+ *  from the time the air spends under the force, \f$T_p = R_h / U\f$, with
+ *  \f$U\f$ the filtered footprint speed: \f$\tau_I = k_I T_p (T_{avg} +
+ *  T_p)\f$ and \f$\tau = \tau_I / r\f$. Slow air, which the force
+ *  accelerates the most, gets the gentlest gains.
+ *
+ *  `ABL.metmast_start_time` (absolute) and `ABL.metmast_start_delay`
+ *  (after the first step of the run, e.g. a restart from a mapped flat
+ *  simulation) delay the footprint average and the force, so that the
+ *  controller starts from the flow at that time and does not integrate a
+ *  spin-up transient.
+ *
+ *  `ABL.metmast_integral_deadband` \f$d\f$ integrates only the part of the
+ *  error beyond what a footprint average over \f$T_{avg}\f$ resolves,
+ *  \f$\mathrm{sign}(e) \max(|e| - d, 0)\f$, so that the integral does not
+ *  build up on the slow natural variability of the flow; the proportional
+ *  term still sees the full error.
+ *
+ *  With `ABL.metmast_integral_deadband_factor` \f$k > 0\f$, each level and
+ *  component sets its own deadband from how much its footprint average
+ *  wanders, \f$d = k \sigma_{avg}\f$. A fast average over
+ *  \f$T_s = T_{avg}/10\f$ has many independent samples within
+ *  \f$T_{avg}\f$, and the variance of an average falls as \f$1/T\f$
+ *  beyond the eddy time scale, so
+ *  \f$\sigma_{avg}^2 = \overline{(\bar{U}_s - \bar{U})^2}\, T_s / T_{avg}\f$,
+ *  filtered over \f$T_{avg}\f$. The estimate needs \f$T_{avg}\f$ of
+ *  data: until then the fixed deadband \f$d_0\f$ is used, and without one
+ *  the integral waits.
  */
 class MetMastForcing : public MomentumSource::Register<MetMastForcing>
 {
@@ -97,10 +132,28 @@ public:
     //! Body-force mode footprint standard deviation of a level (global index)
     [[nodiscard]] amrex::Real footprint_sigma(int ilev, int n) const;
 
+    //! Integral deadband in use for a level (global index)
+    [[nodiscard]] amrex::Real integral_deadband(int ilev, int n) const
+    {
+        return m_deadband[(ilev * AMREX_SPACEDIM) + n];
+    }
+
     //! Body-force mode body force of a level (global index)
     [[nodiscard]] amrex::Real body_force(int ilev, int n) const
     {
         return m_force[(ilev * AMREX_SPACEDIM) + n];
+    }
+
+    //! Proportional time scale in use for a level (global index)
+    [[nodiscard]] amrex::Real level_timescale(int ilev) const
+    {
+        return m_level_tau[ilev];
+    }
+
+    //! Integral time scale in use for a level (global index)
+    [[nodiscard]] amrex::Real level_integral_timescale(int ilev) const
+    {
+        return m_level_ti[ilev];
     }
 
 private:
@@ -169,8 +222,31 @@ private:
     amrex::Real m_averaging_time{120};
     //! Horizontal radius of the footprint average (default: forcing radius)
     amrex::Real m_averaging_radius{500};
+    //! Range-gate length of the footprint average (0: forcing weights)
+    amrex::Real m_gate_length{0};
+    //! Compute and write the footprint averages without forcing
+    bool m_monitor_only{false};
+    //! Simulation time from which the footprint average and force start
+    amrex::Real m_start_time{0};
+    //! Delay after the first step of this run before they start
+    amrex::Real m_start_delay{0};
+    //! Time of the first step of this run (negative before it)
+    mutable amrex::Real m_first_time{-1};
+    //! Schedule the gains of each level from the local residence time
+    bool m_gain_schedule{false};
+    //! Scheduled tau_I = factor * T_p * (T_avg + T_p), with T_p = R_h / U
+    amrex::Real m_integral_factor{2};
+    //! Scheduled tau = tau_I / ratio
+    amrex::Real m_integral_ratio{10};
+    //! Floor on the footprint speed of the gain schedule
+    amrex::Real m_min_speed{0.5};
     //! Integral time scale of the controller (0 or negative: no integral)
     amrex::Real m_integral_timescale{-1};
+    //! Errors up to this magnitude are not integrated
+    amrex::Real m_integral_deadband{0};
+    //! Automatic deadband: this many standard deviations of the footprint
+    //! average over the averaging time (0: off)
+    amrex::Real m_deadband_factor{0};
     //! Also force the vertical velocity in body-force mode
     bool m_force_vertical{false};
     //! Largest body force per component in body-force mode (0 or negative:
@@ -188,6 +264,16 @@ private:
     mutable amrex::Vector<amrex::Real> m_second_moment;
     mutable amrex::Vector<amrex::Real> m_integral;
     mutable amrex::Vector<amrex::Real> m_force;
+    //! Automatic deadband: fast footprint average, variance of its departure
+    //! from the footprint average, and the deadband in use
+    mutable amrex::Vector<amrex::Real> m_fast_mean;
+    mutable amrex::Vector<amrex::Real> m_fast_var;
+    mutable amrex::Vector<amrex::Real> m_deadband;
+    //! Time since the controller started (warm-up of the automatic deadband)
+    mutable amrex::Real m_controller_time{0};
+    //! Gains of each level in use (fixed or scheduled)
+    mutable amrex::Vector<amrex::Real> m_level_tau;
+    mutable amrex::Vector<amrex::Real> m_level_ti;
     mutable amrex::Gpu::DeviceVector<amrex::Real> m_force_d;
     mutable amrex::Gpu::DeviceVector<amrex::Real> m_sums_d;
     mutable bool m_initialized{false};
