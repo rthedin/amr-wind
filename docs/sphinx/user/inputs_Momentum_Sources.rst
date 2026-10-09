@@ -405,16 +405,17 @@ cells inside the terrain are not forced.
    Half-width :math:`\alpha` of the tolerance band in standard deviations. A
    value of 0 relaxes the velocity to the measured mean. Met-mast points have
    no standard deviation and are always relaxed to the mean. Only used by the
-   instantaneous forcing.
+   ``relaxation`` forcing.
 
 .. input_param:: ABL.metmast_forcing_type
 
-   **type:** String, optional, default = instantaneous
+   **type:** String, optional, default = relaxation
 
-   ``instantaneous`` relaxes the local velocity as described above. In LES this
+   ``relaxation`` pulls each cell's own velocity towards the measurements as
+   described above. In LES this
    also damps the resolved turbulence at the rate :math:`2k/\tau`, which is
    larger than the shear production for the time scales that hold the mean.
-   ``mean`` compares the measurements with the model's footprint average
+   ``body_force`` compares the measurements with the model's footprint average
    instead, like a virtual lidar, and applies the difference as a body force
    that does not depend on the local velocity. For every level :math:`l` of
    every station :math:`i`, the velocity is averaged over the station weights
@@ -482,14 +483,14 @@ cells inside the terrain are not forced.
 
    **type:** Boolean, optional, default = false
 
-   Also force the vertical velocity in the mean forcing.
+   Also force the vertical velocity with ``body_force``.
 
 .. input_param:: ABL.metmast_output_frequency
 
    **type:** Integer, optional, default = 10
 
-   Steps between outputs of the mean forcing to
-   ``post_processing/metmast_mean.txt``: per station level the measured
+   Steps between outputs of the ``body_force`` forcing to
+   ``post_processing/metmast_body_force.txt``: per station level the measured
    velocity and standard deviation, the footprint average and standard
    deviation, and the force. The footprint standard deviation includes the
    spatial variation within the footprint. Zero turns the output off.

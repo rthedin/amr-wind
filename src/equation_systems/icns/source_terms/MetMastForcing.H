@@ -42,10 +42,10 @@ struct ForcingParams;
  *  forcing is applied in the cells inside the terrain.
  *
  *  The relaxation above acts on the instantaneous velocity, so in LES it also
- *  damps the resolved turbulence. With `ABL.metmast_forcing_type = mean`, the
- *  forcing instead acts on the model's footprint average, as a virtual lidar.
- *  Each step, the velocity is averaged over the weights \f$w_i\f$ of every
- *  level \f$l\f$ of every station, with the horizontal radius
+ *  damps the resolved turbulence. With `ABL.metmast_forcing_type = body_force`,
+ * the forcing instead acts on the model's footprint average, as a virtual
+ * lidar. Each step, the velocity is averaged over the weights \f$w_i\f$ of
+ * every level \f$l\f$ of every station, with the horizontal radius
  *  `ABL.metmast_averaging_radius` (default \f$R_h\f$) to match the lidar
  *  measurement volume, and filtered in time over \f$T_{avg}\f$:
  *
@@ -88,24 +88,24 @@ public:
         return static_cast<int>(m_level_z.size());
     }
 
-    //! Mean-mode filtered footprint velocity of a level (global index)
-    [[nodiscard]] amrex::Real mean_velocity(int ilev, int n) const
+    //! Body-force mode filtered footprint velocity of a level (global index)
+    [[nodiscard]] amrex::Real footprint_velocity(int ilev, int n) const
     {
-        return m_mean[(ilev * AMREX_SPACEDIM) + n];
+        return m_footprint_mean[(ilev * AMREX_SPACEDIM) + n];
     }
 
-    //! Mean-mode footprint standard deviation of a level (global index)
-    [[nodiscard]] amrex::Real sigma_velocity(int ilev, int n) const;
+    //! Body-force mode footprint standard deviation of a level (global index)
+    [[nodiscard]] amrex::Real footprint_sigma(int ilev, int n) const;
 
-    //! Mean-mode body force of a level (global index)
-    [[nodiscard]] amrex::Real mean_force(int ilev, int n) const
+    //! Body-force mode body force of a level (global index)
+    [[nodiscard]] amrex::Real body_force(int ilev, int n) const
     {
         return m_force[(ilev * AMREX_SPACEDIM) + n];
     }
 
 private:
     //! Average the velocity over the footprints and update the controller
-    void update_mean_forcing(
+    void update_body_force(
         const metmast::StationView& st,
         const metmast::ForcingParams& prm) const;
 
@@ -163,17 +163,18 @@ private:
     //! Half-width of the tolerance band in standard deviations
     amrex::Real m_sigma_factor{1};
 
-    //! Force the footprint mean (true) or the instantaneous velocity (false)
-    bool m_mean_mode{false};
+    //! Body-force mode (true) or relaxation of the local velocity (false)
+    bool m_body_force_mode{false};
     //! Time filter of the footprint averages
     amrex::Real m_averaging_time{120};
     //! Horizontal radius of the footprint average (default: forcing radius)
     amrex::Real m_averaging_radius{500};
     //! Integral time scale of the controller (0 or negative: no integral)
     amrex::Real m_integral_timescale{-1};
-    //! Also force the vertical velocity in mean mode
+    //! Also force the vertical velocity in body-force mode
     bool m_force_vertical{false};
-    //! Largest body force per component in mean mode (0 or negative: none)
+    //! Largest body force per component in body-force mode (0 or negative:
+    //! none)
     amrex::Real m_max_force{0};
     //! Steps between outputs of the footprint averages (0: no output)
     int m_output_frequency{10};
@@ -182,8 +183,8 @@ private:
     //! Output directory, the same as the sampling output
     std::string m_post_dir{"post_processing"};
 
-    //! Mean-mode state, AMREX_SPACEDIM values per level
-    mutable amrex::Vector<amrex::Real> m_mean;
+    //! Body-force mode state, AMREX_SPACEDIM values per level
+    mutable amrex::Vector<amrex::Real> m_footprint_mean;
     mutable amrex::Vector<amrex::Real> m_second_moment;
     mutable amrex::Vector<amrex::Real> m_integral;
     mutable amrex::Vector<amrex::Real> m_force;
