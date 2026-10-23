@@ -1,6 +1,6 @@
 #include "src/equation_systems/temperature/source_terms/DragTempForcing.H"
 #include "src/utilities/IOManager.H"
-#include "src/wind_energy/MOData.H"
+#include "src/transport_models/TransportModel.H"
 #include "AMReX_ParmParse.H"
 #include "AMReX_Gpu.H"
 #include "AMReX_Random.H"
@@ -21,17 +21,8 @@ DragTempForcing::DragTempForcing(const CFDSim& sim)
     pp.query("drag_coefficient", m_drag_coefficient);
     pp.query("soil_temperature", m_soil_temperature);
     pp.query("bc_forcing_time_factor", m_forcing_time_factor);
-    amrex::ParmParse pp_abl("ABL");
-    pp_abl.query("wall_het_model", m_wall_het_model);
-    pp_abl.query("monin_obukhov_length", m_monin_obukhov_length);
-    pp_abl.query("kappa", m_kappa);
-    pp_abl.query("mo_gamma_m", m_gamma_m);
-    pp_abl.query("mo_beta_m", m_beta_m);
-    pp_abl.query("mo_gamma_m", m_gamma_h);
-    pp_abl.query("mo_beta_m", m_beta_h);
-
-    amrex::ParmParse pp_incflo("incflo");
-    pp_incflo.queryarr("gravity", m_gravity);
+    m_stability = surface_stability::parse(
+        identifier(), sim.transport_model().reference_temperature());
 }
 
 DragTempForcing::~DragTempForcing() = default;
@@ -57,26 +48,31 @@ void DragTempForcing::operator()(
     const auto& geom = m_mesh.Geom(lev);
     const auto& dx = geom.CellSizeArray();
     const amrex::Real drag_coefficient = m_drag_coefficient / dx[2];
-    const amrex::Real gravity_mod = std::abs(m_gravity[2]);
-    const amrex::Real kappa = m_kappa;
+    // With the Obukhov-length input the stability corrections are the same in
+    // every cell; with the other inputs they are solved per terrain-drag cell
+    auto stability = m_stability;
+    surface_stability::update(stability, m_time.current_time());
+    const bool local_stability = stability.is_local();
+    const amrex::Real gravity_mod = stability.gravity;
+    const amrex::Real kappa = stability.kappa;
     const amrex::Real z0_min = 1.0e-4_rt;
-    const amrex::Real monin_obukhov_length = m_monin_obukhov_length;
+    const amrex::Real monin_obukhov_length = stability.obukhov_len;
     const auto& dt = m_time.delta_t();
-    const amrex::Real psi_m =
-        (m_wall_het_model == "mol")
-            ? MOData::calc_psi_m(
-                  1.5_rt * dx[2] / m_monin_obukhov_length, m_beta_m, m_gamma_m)
-            : 0.0_rt;
+    const amrex::Real psi_m = stability.non_neutral
+                                  ? surface_stability::psi_m(
+                                        1.5_rt * dx[2] / monin_obukhov_length,
+                                        stability.beta_m, stability.gamma_m)
+                                  : 0.0_rt;
     const amrex::Real psi_h_neighbour =
-        (m_wall_het_model == "mol")
-            ? MOData::calc_psi_h(
-                  1.5_rt * dx[2] / m_monin_obukhov_length, m_beta_h, m_gamma_h)
-            : 0.0_rt;
+        stability.non_neutral ? surface_stability::psi_h(
+                                    1.5_rt * dx[2] / monin_obukhov_length,
+                                    stability.beta_h, stability.gamma_h)
+                              : 0.0_rt;
     const amrex::Real psi_h_cell =
-        (m_wall_het_model == "mol")
-            ? MOData::calc_psi_h(
-                  0.5_rt * dx[2] / m_monin_obukhov_length, m_beta_h, m_gamma_h)
-            : 0.0_rt;
+        stability.non_neutral ? surface_stability::psi_h(
+                                    0.5_rt * dx[2] / monin_obukhov_length,
+                                    stability.beta_h, stability.gamma_h)
+                              : 0.0_rt;
     const auto tiny = std::numeric_limits<amrex::Real>::epsilon();
     const amrex::Real cd_max = 10.0_rt;
     const amrex::Real T0 = m_soil_temperature;
@@ -100,18 +96,35 @@ void DragTempForcing::operator()(
             const amrex::Real uz1 = vel(i, j, k, 2);
             const amrex::Real theta = temperature(i, j, k, 0);
             const amrex::Real theta2 = temperature(i, j, k + 1, 0);
-            const amrex::Real wspd = std::sqrt((ux1 * ux1) + (uy1 * uy1));
-            const amrex::Real ustar =
-                wspd * kappa / (std::log(1.5_rt * dx[2] / z0) - psi_m);
-            const amrex::Real thetastar =
-                theta * ustar * ustar /
-                (kappa * gravity_mod * monin_obukhov_length);
-            const amrex::Real surf_temp =
-                theta2 - (thetastar / kappa *
-                          (std::log(1.5_rt * dx[2] / z0) - psi_h_neighbour));
-            const amrex::Real tTarget =
-                surf_temp + (thetastar / kappa *
-                             (std::log(0.5_rt * dx[2] / z0) - psi_h_cell));
+            amrex::Real tTarget = theta;
+            if (local_stability && drag(i, j, k) == 1) {
+                // Solve the surface layer from the cell above at 1.5 dz and
+                // evaluate the profile at the cell centre
+                const amrex::Real ux2 = vel(i, j, k + 1, 0);
+                const amrex::Real uy2 = vel(i, j, k + 1, 1);
+                const auto sl = surface_stability::solve(
+                    stability, std::sqrt((ux2 * ux2) + (uy2 * uy2)), theta2,
+                    1.5_rt * dx[2], z0);
+                tTarget = surface_stability::theta_at(
+                    stability, sl, 0.5_rt * dx[2], z0);
+            } else if (!local_stability) {
+                // The log law is evaluated at 1.5 dz on purpose: the
+                // log-law height 0.5 dz of the terrain cell is affected by
+                // the terrain forcing
+                const amrex::Real wspd = std::sqrt((ux1 * ux1) + (uy1 * uy1));
+                const amrex::Real ustar =
+                    wspd * kappa / (std::log(1.5_rt * dx[2] / z0) - psi_m);
+                const amrex::Real thetastar =
+                    theta * ustar * ustar /
+                    (kappa * gravity_mod * monin_obukhov_length);
+                const amrex::Real surf_temp =
+                    theta2 -
+                    (thetastar / kappa *
+                     (std::log(1.5_rt * dx[2] / z0) - psi_h_neighbour));
+                tTarget =
+                    surf_temp + (thetastar / kappa *
+                                 (std::log(0.5_rt * dx[2] / z0) - psi_h_cell));
+            }
             const amrex::Real bc_forcing_t =
                 -(tTarget - theta) / (time_factor * dt);
             const amrex::Real m =

@@ -6,6 +6,7 @@
 #include "src/core/FieldRepo.H"
 #include "src/utilities/constants.H"
 #include "AMReX_REAL.H"
+#include "src/wind_energy/SurfaceStability.H"
 
 using namespace amrex::literals;
 
@@ -68,11 +69,8 @@ private:
     const Field& m_theta;
     Field& m_Nij;
     Field& m_divNij;
-    std::string m_wall_het_model{"none"};
-    amrex::Real m_monin_obukhov_length{constants::LARGE_NUM};
-    amrex::Real m_kappa{0.41_rt};
-    amrex::Real m_gamma_m{5.0_rt};
-    amrex::Real m_beta_m{16.0_rt};
+    //! Surface-layer stability inputs (ABL.surface_stability_type)
+    surface_stability::StabilityParams m_stability;
     amrex::Real m_surface_roughness_z0{0.1_rt};
     amrex::Vector<amrex::Real> m_gravity{0.0_rt, 0.0_rt, -9.81_rt};
 };

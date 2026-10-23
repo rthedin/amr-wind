@@ -89,7 +89,8 @@ This section is for setting atmospheric boundary layer parameters.
 
    Surface temperature flux setting for the ABL wall function. Specifies a constant temperature flux
    at the wall-modeled boundary. This is not a required argument because there are other options for
-   setting up the surface temperature condition.
+   setting up the surface temperature condition. With :input_param:`ABL.surface_stability_type` =
+   heat_flux it also sets the heat flux of the terrain surface, in K m/s.
 
 .. input_param:: ABL.surface_temp_flux_timetable
 
@@ -133,7 +134,9 @@ This section is for setting atmospheric boundary layer parameters.
 
    **type:** Real, optional
 
-   Constant rate at which the surface temperature changes.
+   Constant rate at which the surface temperature changes, in K/hr. With
+   :input_param:`ABL.surface_stability_type` = heating_rate it also sets the rate for the
+   terrain surface.
 
 .. input_param:: ABL.surface_temp_init
 
@@ -142,6 +145,8 @@ This section is for setting atmospheric boundary layer parameters.
    Initial temperature of the wall-modeled surface. This parameter is only active
    when the surface temperature rate is specified. If this parameter is active but not
    specified, the initial temperature will be set to the reference temperature of the simulation.
+   With :input_param:`ABL.surface_stability_type` = heating_rate or surface_temperature it also
+   sets the terrain surface temperature.
 
 .. input_param:: ABL.surface_temp_rate_tstart
 
@@ -371,9 +376,58 @@ This section is for setting atmospheric boundary layer parameters.
 
 .. input_param:: ABL.monin_obukhov_length
 
-   **type:** Real, optional, default = -1e30 
+   **type:** Real, optional, default = 1e-10 times the largest Real (neutral)
 
-   Used in conjunction with `ABL.wall_het_model`. The default value runs a neutral boundary layer. 
+   Used in conjunction with `ABL.wall_het_model`. The default value runs a neutral boundary layer.
+   With `ABL.wall_het_model = "mol"` it must satisfy \|L\| > machine epsilon; the run aborts otherwise.
+
+.. input_param:: ABL.surface_stability_type
+
+   **type:** String, optional, default = "monin_obukhov_length"
+
+   Sets the stability of the terrain surface layer used by the `DragForcing` and
+   `DragTempForcing` source terms and by the `Kosovic` model on terrain. Only these and
+   `KLAxell`/`KransAxell` read this key; the flat-wall `ABLWallFunction` does not. The options
+   follow the amrTerrain 1-D RANS solver and reuse the `ABLWallFunction` keys: the flat wall has
+   the heat-flux and heating-rate inputs, and a constant surface temperature there is a zero
+   :input_param:`ABL.surface_temp_rate`.
+   Options other than the default require `ABL.wall_het_model = "mol"`; the run aborts otherwise.
+   The run also aborts if a surface temperature key that belongs to another option
+   (:input_param:`ABL.surface_temp_flux`, :input_param:`ABL.surface_temp_rate`,
+   :input_param:`ABL.surface_temp_timetable`, :input_param:`ABL.surface_temp_flux_timetable`,
+   :input_param:`ABL.near_surface_temp_timetable`) is also set, so that the flat wall and the
+   terrain cannot use different inputs. :input_param:`ABL.kappa` must be > 0 and
+   `ABL.mo_gamma_m`, `ABL.mo_beta_m`, `ABL.mo_gamma_h` and `ABL.mo_beta_h` must be >= 0.
+
+   ======================== ============================================================ ===========================================================================
+   Value                    Inputs read                                                  Effect
+   ======================== ============================================================ ===========================================================================
+   monin_obukhov_length     :input_param:`ABL.monin_obukhov_length`                      The same Obukhov length in every terrain cell (the behaviour before this option).
+   heat_flux                :input_param:`ABL.surface_temp_flux` (required, \|q\| <= 10) Each terrain cell solves for the friction velocity, Obukhov length and surface temperature.
+   heating_rate             :input_param:`ABL.surface_temp_rate` (required),             The surface temperature changes at the given rate (K/hr) after the start time;
+                            :input_param:`ABL.surface_temp_init` (> 0, default =         each terrain cell solves for the heat flux and Obukhov length.
+                            reference temperature),
+                            :input_param:`ABL.surface_temp_rate_tstart` (>= 0)
+   surface_temperature      :input_param:`ABL.surface_temp_init` (required, > 0)         A constant surface temperature; each terrain cell solves for the heat flux and
+                                                                                         Obukhov length.
+   ======================== ============================================================ ===========================================================================
+
+   The per-cell solve uses the wind speed and potential temperature of the cell above the
+   terrain cell, at 1.5 times the cell height, and the terrain roughness for both momentum
+   and heat. It finds :math:`\zeta = z/L` by bisection in :math:`[\zeta_{lo}, 2]`, where
+   :math:`\zeta_{lo}` is -5 or, if larger, the value at which
+   :math:`\ln(z/z_0) - \psi_h` falls to half of :math:`\ln(z/z_0)`. When there is no root
+   in this range (a stable surface below the critical wind speed, or a very unstable surface
+   at low wind speed) :math:`\zeta` is held at the bound: with `heat_flux` the heat flux is
+   then reduced to the flux the bound can carry, and with the surface temperature inputs the
+   heat flux follows from the surface temperature. In the heat-flux option the requested
+   flux is delivered in full for wind speeds of 3 m/s and above at 1.5 times the cell
+   height; at 1 m/s and below a large unstable flux is reduced strongly. With `Kosovic` the near-wall RANS length scale uses the
+   mean of 1/L over the terrain cells of each level (so it can differ between levels), and
+   options other than the default need `TerrainDrag`. The roughness length used in the solve is
+   limited to 1/e of the reference height. The `KLAxell` model and the `KransAxell` source term take the friction
+   velocity from :input_param:`ABL.monin_obukhov_length` and the TKE boundary condition from
+   :input_param:`ABL.surface_temp_flux`, so they abort for any option other than the default.
 
 .. input_param:: ABL.terrain_aligned_profile 
 

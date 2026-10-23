@@ -5,6 +5,7 @@
 #include "src/core/SimTime.H"
 #include "src/CFDSim.H"
 #include "src/utilities/constants.H"
+#include "src/wind_energy/SurfaceStability.H"
 #include "AMReX_REAL.H"
 
 using namespace amrex::literals;
@@ -62,11 +63,10 @@ private:
     bool m_is_laminar{false};
     bool m_terrain_is_waves{false};
     bool m_apply_MOSD{false};
-    std::string m_wall_het_model{"none"};
-    amrex::Real m_monin_obukhov_length{constants::LARGE_NUM};
-    amrex::Real m_kappa{0.41_rt};
-    amrex::Real m_gamma_m{5.0_rt};
-    amrex::Real m_beta_m{16.0_rt};
+    //! Surface-layer stability inputs (ABL.surface_stability_type)
+    surface_stability::StabilityParams m_stability;
+    //! Temperature, needed when the stability is solved per cell
+    const Field* m_temperature{nullptr};
 };
 
 } // namespace kynema_sgf::pde::icns

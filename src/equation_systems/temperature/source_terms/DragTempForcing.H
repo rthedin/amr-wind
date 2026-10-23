@@ -5,6 +5,7 @@
 #include "src/core/SimTime.H"
 #include "src/CFDSim.H"
 #include "src/utilities/constants.H"
+#include "src/wind_energy/SurfaceStability.H"
 #include "AMReX_REAL.H"
 
 using namespace amrex::literals;
@@ -31,16 +32,10 @@ private:
     const Field& m_temperature;
     amrex::Real m_drag_coefficient{1.0_rt};
 
-    std::string m_wall_het_model{"none"};
-    amrex::Real m_monin_obukhov_length{constants::LARGE_NUM};
-    amrex::Real m_kappa{0.41_rt};
-    amrex::Real m_gamma_m{5.0_rt};
-    amrex::Real m_beta_m{16.0_rt};
-    amrex::Real m_gamma_h{5.0_rt};
-    amrex::Real m_beta_h{16.0_rt};
+    //! Surface-layer stability inputs (ABL.surface_stability_type)
+    surface_stability::StabilityParams m_stability;
     amrex::Real m_soil_temperature{300};
     amrex::Real m_forcing_time_factor{5.0_rt};
-    amrex::Vector<amrex::Real> m_gravity{0.0_rt, 0.0_rt, -9.81_rt};
 };
 
 } // namespace kynema_sgf::pde::temperature

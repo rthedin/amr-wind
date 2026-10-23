@@ -6,6 +6,7 @@
 #include "src/physics/ForestCanopy.H"
 #include "src/utilities/constants.H"
 #include "AMReX_REAL.H"
+#include "src/wind_energy/SurfaceStability.H"
 
 using namespace amrex::literals;
 
@@ -67,10 +68,8 @@ private:
     bool m_sponge_east{false};
     bool m_sponge_south{false};
     bool m_sponge_north{false};
-    std::string m_wall_het_model{"none"};
-    amrex::Real m_monin_obukhov_length{constants::LARGE_NUM};
-    amrex::Real m_gamma_m{5.0_rt};
-    amrex::Real m_beta_m{16.0_rt};
+    //! Surface-layer stability inputs; only the Obukhov length is supported
+    surface_stability::StabilityParams m_stability;
     //! Canopy TKE source inputs (ForestDrag.canopy_tke and coefficients)
     forestdrag::CanopyTurbulence m_canopy;
 };

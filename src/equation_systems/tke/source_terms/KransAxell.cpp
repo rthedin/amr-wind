@@ -3,7 +3,6 @@
 #include "src/equation_systems/tke/source_terms/KransAxell.H"
 #include "src/CFDSim.H"
 #include "src/turbulence/TurbulenceModel.H"
-#include "src/wind_energy/MOData.H"
 #include "src/utilities/linear_interpolation.H"
 #include "src/utilities/constants.H"
 #include "src/utilities/math_ops.H"
@@ -55,10 +54,9 @@ KransAxell::KransAxell(const CFDSim& sim)
     } else {
         amrex::Abort("Cannot find 1-D RANS profile file " + m_1d_rans);
     }
-    pp.query("wall_het_model", m_wall_het_model);
-    pp.query("monin_obukhov_length", m_monin_obukhov_length);
-    pp.query("mo_gamma_m", m_gamma_m);
-    pp.query("mo_beta_m", m_beta_m);
+    m_stability = surface_stability::parse(
+        identifier(), sim.transport_model().reference_temperature());
+    surface_stability::require_obukhov_length(m_stability, identifier());
 
     amrex::ParmParse pp_incflo("incflo");
     pp_incflo.queryarr("gravity", m_gravity);
@@ -114,9 +112,10 @@ void KransAxell::operator()(
     const amrex::GpuArray<amrex::Real, AMREX_SPACEDIM> gravity{
         m_gravity[0], m_gravity[1], m_gravity[2]};
     amrex::Real psi_m = 0.0_rt;
-    if (m_wall_het_model == "mol") {
-        psi_m = MOData::calc_psi_m(
-            1.5_rt * dx[2] / m_monin_obukhov_length, m_beta_m, m_gamma_m);
+    if (m_stability.non_neutral) {
+        psi_m = surface_stability::psi_m(
+            1.5_rt * dx[2] / m_stability.obukhov_len, m_stability.beta_m,
+            m_stability.gamma_m);
     }
 
     auto const& src_arrs = src_term.arrays();

@@ -1,4 +1,5 @@
 #include "src/turbulence/RANS/KLAxell.H"
+#include "src/wind_energy/SurfaceStability.H"
 #include "src/equation_systems/PDEBase.H"
 #include "src/turbulence/TurbModelDefs.H"
 #include "src/fvm/gradient.H"
@@ -36,6 +37,13 @@ KLAxell<Transport>::KLAxell(CFDSim& sim)
         pp.get("surface_temp_flux", m_surf_flux);
         pp.query("meso_sponge_start", m_meso_sponge_start);
     }
+    // The friction velocity comes from ABL.monin_obukhov_length and the TKE
+    // boundary condition from ABL.surface_temp_flux, both taken from the same
+    // 1-D RANS solution
+    surface_stability::require_obukhov_length(
+        surface_stability::parse(
+            identifier(), this->m_transport.reference_temperature()),
+        identifier());
 
     {
         amrex::ParmParse pp("incflo");
