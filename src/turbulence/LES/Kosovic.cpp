@@ -58,11 +58,8 @@ Kosovic<Transport>::Kosovic(CFDSim& sim)
         "Kosovic.LESTurbOff_transition_zaglend");
     pp.query("muCoeff", m_muCoeff);
     amrex::ParmParse pp_abl("ABL");
-    pp_abl.query("wall_het_model", m_wall_het_model);
-    pp_abl.query("monin_obukhov_length", m_monin_obukhov_length);
-    pp_abl.query("kappa", m_kappa);
-    pp_abl.query("mo_gamma_m", m_gamma_m);
-    pp_abl.query("mo_beta_m", m_beta_m);
+    m_stability = surface_stability::parse(
+        identifier(), this->m_transport.reference_temperature());
     pp_abl.query("surface_roughness_z0", m_surface_roughness_z0);
 
     amrex::ParmParse pp_incflo("incflo");
@@ -89,8 +86,10 @@ void Kosovic<Transport>::update_turbulent_viscosity(
         m_gravity[0], m_gravity[1], m_gravity[2]};
 
     const amrex::Real Cs_sqr = this->m_Cs * this->m_Cs;
-    const amrex::Real monin_obukhov_length = m_monin_obukhov_length;
-    const amrex::Real kappa = m_kappa;
+    auto stability = m_stability;
+    surface_stability::update(stability, this->m_sim.time().current_time());
+    const bool local_stability = stability.is_local();
+    const amrex::Real kappa = stability.kappa;
     const amrex::Real surface_roughness_z0 = m_surface_roughness_z0;
     const amrex::Real z0_min = 1.0e-4_rt;
     const amrex::Real dMdz_min = 0.01_rt;
@@ -157,11 +156,33 @@ void Kosovic<Transport>::update_turbulent_viscosity(
         const auto& z0_arrs = has_terrain
                                   ? (*m_terrain_z0)(lev).const_arrays()
                                   : amrex::MultiArray4<const amrex::Real>();
+        // With the Obukhov-length input L is the input value. With the other
+        // inputs the log law at each terrain-drag cell uses its own L, and
+        // the RANS length scale uses the mean of 1/L over the level
+        amrex::Real monin_obukhov_length = stability.obukhov_len;
+        if (local_stability) {
+            if (!has_terrain) {
+                amrex::Abort(
+                    "Kosovic: ABL.surface_stability_type = " +
+                    surface_stability::type_name(stability.type) +
+                    " needs TerrainDrag; without terrain use "
+                    "ABL.monin_obukhov_length");
+            }
+            const amrex::Real inv_l =
+                surface_stability::mean_inverse_obukhov_length(
+                    stability, this->m_sim, lev, vel, m_theta.state(fstate));
+            monin_obukhov_length = (std::abs(inv_l) > 0.0_rt)
+                                       ? 1.0_rt / inv_l
+                                       : constants::LARGE_NUM;
+        }
         const amrex::Real non_neutral_neighbour =
-            (m_wall_het_model == "mol")
-                ? MOData::calc_psi_m(
-                      1.5_rt * dz / monin_obukhov_length, m_beta_m, m_gamma_m)
-                : 0.0_rt;
+            stability.non_neutral ? surface_stability::psi_m(
+                                        1.5_rt * dz / monin_obukhov_length,
+                                        stability.beta_m, stability.gamma_m)
+                                  : 0.0_rt;
+        const auto& theta_arrs = local_stability
+                                     ? m_theta.state(fstate)(lev).const_arrays()
+                                     : amrex::MultiArray4<const amrex::Real>();
         const auto& ref_theta_arrs = (*ref_theta)(lev).const_arrays();
         amrex::ParallelFor(
             mu_turb(lev), [=] AMREX_GPU_DEVICE(int nbx, int i, int j, int k) {
@@ -241,10 +262,21 @@ void Kosovic<Transport>::update_turbulent_viscosity(
                     (has_terrain) ? amrex::max<amrex::Real>(
                                         z0_arrs[nbx](i, j, k, 0), z0_min)
                                   : surface_roughness_z0;
+                const amrex::Real drag =
+                    (has_terrain) ? drag_arrs[nbx](i, j, k, 0) : 0.0_rt;
+                amrex::Real psi_neighbour = non_neutral_neighbour;
+                if (local_stability && drag > 0.0_rt) {
+                    const auto sl = surface_stability::solve(
+                        stability, m, theta_arrs[nbx](i, j, k + 1), 1.5_rt * dz,
+                        local_z0);
+                    psi_neighbour = surface_stability::psi_m(
+                        1.5_rt * dz / sl.obukhov_len, stability.beta_m,
+                        stability.gamma_m);
+                }
                 // ustar from neighbor cell above
                 const amrex::Real ustar =
                     m * kappa /
-                    (std::log(1.5_rt * dz / local_z0) - non_neutral_neighbour);
+                    (std::log(1.5_rt * dz / local_z0) - psi_neighbour);
                 const amrex::Real ux0 = vel_arrs[nbx](i, j, k, 0);
                 const amrex::Real uy0 = vel_arrs[nbx](i, j, k, 1);
                 const amrex::Real m0 = std::sqrt((ux0 * ux0) + (uy0 * uy0));
@@ -256,8 +288,6 @@ void Kosovic<Transport>::update_turbulent_viscosity(
                     amrex::max<amrex::Real>((m0 - mm1) / dz, dMdz_min);
                 const amrex::Real mut_loglaw =
                     2.0_rt * ustar * ustar * rho / dMdz;
-                const amrex::Real drag =
-                    (has_terrain) ? drag_arrs[nbx](i, j, k, 0) : 0.0_rt;
                 mu_arrs[nbx](i, j, k) =
                     (mu_arrs[nbx](i, j, k) * (1.0_rt - drag)) +
                     (drag * mut_loglaw);

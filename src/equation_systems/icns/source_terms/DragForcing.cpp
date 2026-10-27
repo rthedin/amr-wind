@@ -173,11 +173,17 @@ DragForcing::DragForcing(const CFDSim& sim)
         // i.e., too small to be resolved with cell blanking
         pp.query("wave_model_inviscid_form_drag", m_apply_MOSD);
     }
-    pp_abl.query("wall_het_model", m_wall_het_model);
-    pp_abl.query("monin_obukhov_length", m_monin_obukhov_length);
-    pp_abl.query("kappa", m_kappa);
-    pp_abl.query("mo_gamma_m", m_gamma_m);
-    pp_abl.query("mo_beta_m", m_beta_m);
+    m_stability = surface_stability::parse(
+        identifier(), sim.transport_model().reference_temperature());
+    if (m_stability.is_local()) {
+        if (!sim.repo().field_exists("temperature")) {
+            amrex::Abort(
+                "DragForcing: ABL.surface_stability_type = " +
+                surface_stability::type_name(m_stability.type) +
+                " needs the temperature field");
+        }
+        m_temperature = &sim.repo().get_field("temperature");
+    }
 }
 
 DragForcing::~DragForcing() = default;
@@ -262,20 +268,30 @@ void DragForcing::operator()(
     const amrex::Real Cd = (is_laminar != 0 && dx[2] < 1)
                                ? drag_coefficient
                                : drag_coefficient / dx[2];
-    const amrex::Real kappa = m_kappa;
+    const amrex::Real kappa = m_stability.kappa;
     const amrex::Real z0_min = 1.0e-4_rt;
     const amrex::Real cd_max = 1000.0_rt;
 
+    // With the Obukhov-length input the stability corrections are the same in
+    // every cell; with the other inputs they are solved per terrain-drag cell
+    auto stability = m_stability;
+    surface_stability::update(stability, m_time.current_time());
+    const bool local_stability = stability.is_local();
     const amrex::Real non_neutral_neighbour =
-        (m_wall_het_model == "mol")
-            ? MOData::calc_psi_m(
-                  1.5_rt * dx[2] / m_monin_obukhov_length, m_beta_m, m_gamma_m)
-            : 0.0_rt;
+        stability.non_neutral ? surface_stability::psi_m(
+                                    1.5_rt * dx[2] / stability.obukhov_len,
+                                    stability.beta_m, stability.gamma_m)
+                              : 0.0_rt;
     const amrex::Real non_neutral_cell =
-        (m_wall_het_model == "mol")
-            ? MOData::calc_psi_m(
-                  0.5_rt * dx[2] / m_monin_obukhov_length, m_beta_m, m_gamma_m)
-            : 0.0_rt;
+        stability.non_neutral ? surface_stability::psi_m(
+                                    0.5_rt * dx[2] / stability.obukhov_len,
+                                    stability.beta_m, stability.gamma_m)
+                              : 0.0_rt;
+    auto const& theta_arrs =
+        local_stability
+            ? m_temperature->state(field_impl::dof_state(fstate))(lev)
+                  .const_arrays()
+            : amrex::MultiArray4<amrex::Real const>();
     const int nwvals = static_cast<int>(m_wind_heights.size());
     const amrex::Real* windh = m_windht_d.data();
     const amrex::Real* uu = m_prof_u_d.data();
@@ -358,17 +374,29 @@ void DragForcing::operator()(
                 const amrex::Real uy2r = vel_arrs[nbx](i, j, k + 1, 1) - wall_v;
                 const amrex::Real z0 = amrex::max<amrex::Real>(
                     terrainz0_arrs[nbx](i, j, k), z0_min);
+                amrex::Real psi_neighbour = non_neutral_neighbour;
+                amrex::Real psi_cell = non_neutral_cell;
+                if (local_stability) {
+                    const auto sl = surface_stability::solve(
+                        stability, std::sqrt((ux2r * ux2r) + (uy2r * uy2r)),
+                        theta_arrs[nbx](i, j, k + 1), 1.5_rt * dx[2], z0);
+                    psi_neighbour = surface_stability::psi_m(
+                        1.5_rt * dx[2] / sl.obukhov_len, stability.beta_m,
+                        stability.gamma_m);
+                    psi_cell = surface_stability::psi_m(
+                        0.5_rt * dx[2] / sl.obukhov_len, stability.beta_m,
+                        stability.gamma_m);
+                }
                 const amrex::Real ustar = viscous_drag_calculations(
                     Dxz, Dyz, ux1r, uy1r, ux2r, uy2r, z0, dx[2], kappa,
-                    non_neutral_neighbour);
+                    psi_neighbour);
                 if (model_form_drag != 0) {
                     form_drag_calculations(
                         Dxz, Dyz, i, j, k, target_lvs_arrs[nbx], dx, ux1r,
                         uy1r);
                 }
                 const amrex::Real uTarget =
-                    ustar / kappa *
-                    (std::log(0.5_rt * dx[2] / z0) - non_neutral_cell);
+                    ustar / kappa * (std::log(0.5_rt * dx[2] / z0) - psi_cell);
                 const amrex::Real uxTarget =
                     uTarget * ux2r /
                     (kynema_sgf::constants::EPS +
