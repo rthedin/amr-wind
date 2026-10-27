@@ -173,6 +173,9 @@ private:
     // Be verbose?
     int m_verbose = 0;
 
+    // BC bug study 2026-10-07: refill the Old-state ghosts of mio outflow cells
+    bool m_inout_consistent_ghosts{false};
+
     // Initial projection / iterations
     bool m_do_initial_proj = true;
     int m_initial_iterations = 3;

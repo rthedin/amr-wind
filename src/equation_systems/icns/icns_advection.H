@@ -48,6 +48,12 @@ public:
 
     [[nodiscard]] amrex::Real rho0() const { return m_rho_0; }
 
+    //! BC bug study 2026-10-07: no re-entry through mio outflow faces (public:
+    //! nvcc rejects an extended device lambda in a private member function)
+    void clip_inout_backflow(
+        const amrex::Vector<amrex::Array<amrex::MultiFab*, AMREX_SPACEDIM>>&
+            a_umac);
+
 private:
     void init_projector(const FaceFabPtrVec& /*beta*/);
     void init_projector(amrex::Real /*beta*/);
@@ -69,6 +75,8 @@ private:
     bool m_variable_density{false};
     bool m_mesh_mapping{false};
     bool m_is_anelastic{false};
+    //! BC bug study 2026-10-07: ICNS.clip_inout_backflow
+    bool m_clip_inout_backflow{false};
     amrex::Real m_rho_0{1.0_rt};
 };
 
