@@ -145,6 +145,10 @@ AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE SurfaceLayerState solve(
     const amrex::Real z0)
 {
     constexpr int n_bisect = 60;
+    // nvcc: the namespace-scope constexpr bounds cannot be ODR-used in device
+    // code (amrex::max takes them by reference), so copy them into locals
+    constexpr amrex::Real zeta_lo_bound = zeta_min;
+    constexpr amrex::Real zeta_hi_bound = zeta_max;
     // Guard: a roughness length at or above the reference height (for example
     // a forest roughness on a fine mesh) would make ln(zref/z0) zero or
     // negative and the fluxes infinite or of the wrong sign. The roughness is
@@ -204,7 +208,7 @@ AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE SurfaceLayerState solve(
             // Stable. For the heat flux the residual rises to a maximum and
             // falls again; search only up to that maximum so that the first
             // root is found.
-            hi = zeta_max;
+            hi = zeta_hi_bound;
             if (is_flux && p.gamma_m > 0.0_rt) {
                 const amrex::Real z_peak =
                     (1.0_rt / std::sqrt(-3.0_rt * c_flux * p.gamma_m) -
@@ -213,7 +217,7 @@ AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE SurfaceLayerState solve(
                 hi = amrex::min<amrex::Real>(hi, z_peak);
             }
             if ((hi <= 0.0_rt) || (residual(hi) < 0.0_rt)) {
-                zeta = zeta_max;
+                zeta = zeta_hi_bound;
                 limited = true;
             } else {
                 lo = 0.0_rt;
@@ -223,7 +227,7 @@ AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE SurfaceLayerState solve(
             const amrex::Real x =
                 (2.0_rt * std::exp(0.25_rt * log_ratio)) - 1.0_rt;
             const amrex::Real zeta_h = (1.0_rt - (x * x)) / p.beta_h;
-            lo = amrex::max<amrex::Real>(zeta_min, zeta_h);
+            lo = amrex::max<amrex::Real>(zeta_lo_bound, zeta_h);
             hi = 0.0_rt;
             if (residual(lo) > 0.0_rt) {
                 zeta = lo;
