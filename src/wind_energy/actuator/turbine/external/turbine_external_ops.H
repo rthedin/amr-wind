@@ -24,6 +24,13 @@ void read_ops(datatype& data, const utils::ActParser& pp)
 
     // Get density value for normalization
     pp.get("density", tdata.density);
+    // The forces of the external solver are divided by it
+    if (!(tdata.density > 0.0_rt)) {
+        amrex::Abort(
+            "Actuator " + data.info().label +
+            ": density must be larger than 0. Value read: " +
+            std::to_string(tdata.density));
+    }
 
     // Copy data to external data holder
     const auto& tinfo = data.info();
@@ -260,7 +267,10 @@ void compute_force_op(datatype& data)
         for (int i = 0; i < tdata.num_blades; ++i) {
             if (!(tdata.fllc[i].initialized) &&
                 (time.current_time() > tdata.fllc[i].fllc_start_time)) {
-                fllc_init(tdata.fllc[i], tdata.blades[i], tdata.eps_chord[0]);
+                fllc_init(
+                    tdata.fllc[i], tdata.blades[i], tdata.eps_chord[0],
+                    data.info().label + " blade " + std::to_string(i),
+                    data.info().is_root_proc);
             }
         }
     }
