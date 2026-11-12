@@ -126,8 +126,9 @@ void init_epsilon(datatype& data)
     // row 2 is along the span (blade frame of AeroDyn), so each input value
     // acts in its documented direction. The tower points use the same swap.
     // The FLLC does not use these components: it reads the first value of
-    // epsilon (fllc_parse) and component 0 of the swapped eps_chord, which
-    // is the second input value of epsilon_chord (compute_force_op).
+    // epsilon (fllc_parse) and of epsilon_min (read_inputs), and component
+    // 0 of the swapped eps_chord, which is the second input value of
+    // epsilon_chord (compute_force_op).
     swap_epsilon(tdata.eps_inp);
     swap_epsilon(tdata.eps_min);
     swap_epsilon(tdata.eps_chord);
