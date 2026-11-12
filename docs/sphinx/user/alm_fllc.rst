@@ -15,7 +15,7 @@ To enable the ALM with OpenFAST coupling, ``Actuator`` should be added to ``incf
     Actuator.TurbineFastLine.fllc_nonuniform = 1
     Actuator.TurbineFastLine.fllc_type = variable_chord
 
-When selecting the ``Actuator.TurbineFastLine.fllc_nonuniform`` as ``1``, a new distribution of points is calculated internally, based on the ``Actuator.TurbineFastLine.num_points_blade`` and ``Actuator.TurbineFastLine.fllc_epsilon_dr_ratio`` entries. The ``Actuator.TurbineFastLine.fllc_epsilon_dr_ratio`` value should be at least 1 with a maximum value of 3. It is recommended to use the value 3. This parameter controls the distribution of points, and its value should be selected based on the desired accuracy of the correction, according to Table 1 given in :cite:`MartinezFLLCimpl`.
+When selecting the ``Actuator.TurbineFastLine.fllc_nonuniform`` as ``1`` (the default), the correction is computed with a second set of points along the blade, placed internally with a spacing equal to the optimal epsilon (``epsilon_chord`` times the chord) divided by ``Actuator.TurbineFastLine.fllc_epsilon_dr_ratio``. The lift and the relative velocity at the actuator points are interpolated to these points. The ``Actuator.TurbineFastLine.fllc_epsilon_dr_ratio`` value must be larger than 0; values from 1 to 3 are recommended, and the default is 3. This parameter controls the distribution of points, and its value should be selected based on the desired accuracy of the correction, according to Table 1 given in :cite:`MartinezFLLCimpl`.
 
 .. code-block:: none
 
@@ -23,9 +23,13 @@ When selecting the ``Actuator.TurbineFastLine.fllc_nonuniform`` as ``1``, a new 
 
 .. note::
 
-    The entries ``Actuator.TurbineFastLine.num_points_blade`` and ``Actuator.TurbineFastLine.num_points_tower`` should match the entries ``NumBlNds`` from the AeroDyn blade file  and ``NumTwrNds`` from the AeroDyn input file.
+    ``Actuator.TurbineFastLine.num_points_blade`` is the number of actuator points (force points) per blade. The velocity is sampled at the AeroDyn blade nodes (``NumBlNds``), whose number comes from OpenFAST. The two numbers do not have to be equal when OpenFAST gives each force point the AeroDyn line load integrated over its share of the blade (OpenFAST branch ``f/alminterface``). With other OpenFAST versions, the load of a force point follows the AeroDyn nodes next to it: place the force points on the AeroDyn nodes, with the same number and uniformly spaced AeroDyn nodes. The entry ``Actuator.TurbineFastLine.num_points_tower`` should match ``NumTwrNds`` from the AeroDyn input file.
 
-Two values of epsilon should be set for the FLLC: the regular epsilon and an epsilon for the chord. The regular ``epsilon`` should be set to twice the grid resolution. If you have a very fine grid near the turbine, e.g. 0.625 m,, then you can set ``epsilon`` to be 3 to 4 times the local grid resolution. The smaller the epsilon value, the more sensitive to the resolution the ALM will be. The ``epsilon_chord`` parameter represents the ideal epsilon value if FLLC were not to be used. However, we set both epsilon parameters for FLLC. One of the key details of the correction is that it uses the ``epsilon_chord`` on the non-uniform points, and this should be set to a target value regardless of the underlying grid resolution. The target values again depend on the desired accuracy of the correction and guidelines are also given on Table 1 of :cite:`MartinezFLLCimpl`.
+When the force points and the velocity points differ in number or in position, the FLLC locates every point by its distance along the blade from the first point of its own set. It interpolates the sampled velocity linearly to the force points to form the relative velocity, computes the correction at the force points, and interpolates only the correction back to the velocity points, where it is added to the sampled velocity.
+
+When the correction starts, a warning is printed for each blade whose force points do not resolve the optimal epsilon: at some force point, ``epsilon_chord`` times the chord is smaller than the larger of the distances to the neighbouring force points. The message gives the number of such points and the lowest ratio of the two. The lift is known only at the force points, so the correction then depends on their number: use more points or a larger ``epsilon_chord``. With ``Actuator.TurbineFastLine.fllc_nonuniform`` set to ``0`` the correction is wrong at these points, so keep the default there.
+
+Two values of epsilon should be set for the FLLC: the regular epsilon and an epsilon for the chord. The regular ``epsilon`` should be set to twice the grid resolution. If you have a very fine grid near the turbine, e.g. 0.625 m, then you can set ``epsilon`` to be 3 to 4 times the local grid resolution. The smaller the epsilon value, the more sensitive to the resolution the ALM will be. The ``epsilon_chord`` parameter represents the ideal epsilon value if FLLC were not to be used. However, we set both epsilon parameters for FLLC. One of the key details of the correction is that it uses the ``epsilon_chord`` on the non-uniform points, and this should be set to a target value regardless of the underlying grid resolution. The target values again depend on the desired accuracy of the correction and guidelines are also given on Table 1 of :cite:`MartinezFLLCimpl`. The correction itself uses one value of each input: the first value of ``epsilon`` and the second value of ``epsilon_chord`` (see :input_param:`Actuator.TurbineFastLine.fllc`). Give each of them the same value in all three directions.
 
 .. code-block:: none
 
@@ -41,5 +45,7 @@ Lastly, in certain cases, a numerical instability can arise from the application
 .. code-block:: none
 
     Actuator.TurbineFastLine.fllc_start_time = 5
+
+The state of the correction is part of the checkpoint: each actuator with the correction on writes a small text file into the directory ``actuator`` of every checkpoint, and a run that restarts from that checkpoint goes on from it. A checkpoint without this file (written by an older version, or with other numbers of points) can still be used; a warning is printed and the correction starts again from zero.
 
 More details on other parameters are available in the description of each entry on the :ref:`input file reference page <inputs_actuator>`.
