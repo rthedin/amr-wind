@@ -34,6 +34,11 @@ public:
 
     void init_turbine(const int local_id);
 
+    //! Bring the turbine to the time of the CFD solver: the initial solution
+    //! of a new turbine, nothing right after a restart or a replay, one CFD
+    //! time step otherwise
+    void step_turbine(const int local_id);
+
     void advance_turbine(const int local_id);
 
     int num_local_turbines() const
@@ -134,14 +139,41 @@ void ExtTurbIface<SolverTurbine, SolverData>::init_turbine(const int local_id)
     case ::ext_turb::SimMode::replay: {
         ext_init_turbine(fi);
         ext_replay_turbine(fi);
+        fi.is_solution0 = false;
+        fi.is_at_cfd_time = true;
         break;
     }
 
     case ::ext_turb::SimMode::restart: {
         ext_restart_turbine(fi);
         prepare_netcdf_file(fi);
+        fi.is_solution0 = false;
+        fi.is_at_cfd_time = true;
         break;
     }
+    }
+}
+
+template <typename SolverTurbine, typename SolverData>
+void ExtTurbIface<SolverTurbine, SolverData>::step_turbine(const int local_id)
+{
+    AMREX_ALWAYS_ASSERT(local_id < static_cast<int>(m_turbine_data.size()));
+    auto& fi = *m_turbine_data[local_id];
+
+    if (fi.is_at_cfd_time) {
+        // The checkpoint read at restart, or the steps taken again in a
+        // replay, hold the state and the loads at the time the CFD solver
+        // starts from. An initial solution would compute them again from an
+        // extrapolation history that starts over, and a step would leave the
+        // turbine one CFD time step ahead of the flow.
+        fi.is_at_cfd_time = false;
+        return;
+    }
+
+    if (fi.is_solution0) {
+        init_solution(local_id);
+    } else {
+        advance_turbine(local_id);
     }
 }
 
