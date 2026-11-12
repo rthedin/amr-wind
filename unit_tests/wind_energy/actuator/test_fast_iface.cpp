@@ -3,6 +3,7 @@
 
 #include "src/wind_energy/actuator/turbine/external/ExtTurbIface.H"
 #include "src/wind_energy/actuator/turbine/fast/fast_types.H"
+#include "test_ext_turbine_utils.H"
 
 #include <algorithm>
 #include "AMReX_REAL.H"
@@ -142,6 +143,26 @@ TEST_F(FastIfaceTest, fast_replay)
 #else
     GTEST_SKIP();
 #endif
+}
+
+TEST_F(FastIfaceTest, fast_velocity_points_offset)
+{
+    initialize_mesh();
+
+    ::ext_turb::ExtTurbIface<
+        ::ext_turb::FastTurbine, ::ext_turb::FastSolverData>
+        fast(sim());
+
+    // OpenFAST lists the hub first in its force points and in its velocity
+    // points. The blade views built with the offset of the OpenFAST interface
+    // must pair every force point with its own velocity point.
+    ExtTurbineViewData<::ext_turb::FastTurbine, ::ext_turb::FastSolverData>
+        data;
+    init_hub_first_points(data, 3, 5, 5);
+    data.meta().velocity_points_offset = fast.offset_velocity_points();
+    ::kynema_sgf::actuator::external::make_component_views(data);
+
+    check_blade_views_aligned(data);
 }
 
 } // namespace kynema_sgf_tests

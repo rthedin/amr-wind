@@ -8,6 +8,7 @@ target_sources(${kynema_sgf_unit_test_exe_name} PRIVATE
   test_FLLC.cpp
   test_actuator_joukowsky_disk.cpp
   test_disk_functions.cpp
+  test_turbine_external_views.cpp
   )
 
 if (KYNEMA_SGF_ENABLE_OPENFAST)
