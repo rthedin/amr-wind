@@ -40,6 +40,11 @@ void determine_root_proc(
     utils::determine_root_proc(data.info(), act_proc_count);
 }
 
+template <typename T>
+void write_checkpoint(
+    typename T::DataType& /*data*/, const std::string& /*chkname*/)
+{}
+
 } // namespace kynema_sgf::actuator::ops
 
 #endif /* ACTUATOR_OPSI_H */

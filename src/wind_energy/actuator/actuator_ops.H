@@ -92,6 +92,19 @@ template <typename T>
 void determine_root_proc(
     typename T::DataType& /*data*/, amrex::Vector<int>& /*act_proc_count*/);
 
+/** Write the data of this actuator that a restart needs and that no field
+ *  holds, as a file of its own inside the checkpoint of the CFD solver
+ *
+ *  The default writes nothing. \sa actuator_restart.H
+ *
+ *  \tparam T An actuator traits type
+ *  \param  data Data object for the specific actuator instance
+ *  \param  chkname Directory of the checkpoint
+ */
+template <typename T>
+void write_checkpoint(
+    typename T::DataType& /*data*/, const std::string& /*chkname*/);
+
 } // namespace kynema_sgf::actuator::ops
 
 #include "src/wind_energy/actuator/actuator_opsI.H"

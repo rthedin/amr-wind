@@ -80,6 +80,11 @@ struct TurbineBaseData
     //! beyond the region reserved for this turbine (ActInfo::bound_box)
     bool bound_box_warned{false};
 
+    //! True until the forces are computed for the first time, which in a
+    //! restarted run is at the time of the checkpoint: the restart data of
+    //! the turbine can be read then
+    bool at_first_force_call{true};
+
     std::vector<ComponentView> blades;
     std::vector<FLLCData> fllc;
     ComponentView tower;

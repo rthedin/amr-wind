@@ -1,9 +1,13 @@
 #ifndef TURBINE_EXTERNAL_OPS_H
 #define TURBINE_EXTERNAL_OPS_H
 
+#include <fstream>
+#include <type_traits>
+#include <vector>
 #include "src/wind_energy/actuator/turbine/turbine_utils.H"
 #include "src/wind_energy/actuator/actuator_ops.H"
 #include "src/wind_energy/actuator/actuator_utils.H"
+#include "src/wind_energy/actuator/actuator_restart.H"
 #include "src/wind_energy/actuator/FLLCOp.H"
 #include "src/utilities/IOManager.H"
 #include "src/wind_energy/actuator/turbine/external/turbine_external_utils.H"
@@ -15,8 +19,11 @@ namespace kynema_sgf::actuator::ops {
 template <typename datatype>
 void read_ops(datatype& data, const utils::ActParser& pp)
 {
-    // Tell reading utility the name of the solver
-    data.meta().solver_name = data.meta().ext_ptr->identifier();
+    // Tell reading utility the name of the solver. ext_ptr is not set yet
+    // (external_determine_root_proc sets it, on the root process only), so
+    // the static function is called through the type
+    data.meta().solver_name =
+        std::remove_pointer_t<decltype(data.meta().ext_ptr)>::identifier();
     // Data common to any turbine actuator simulation
     utils::read_inputs(data.meta(), data.info(), pp);
 
@@ -254,6 +261,97 @@ void update_vel_op(datatype& data)
     }
 }
 
+/** Write the state of the filtered lifting line correction of an external
+ *  turbine into a checkpoint
+ *
+ *  Per blade: the state of the correction (fllc_write_state), and the fluid
+ *  velocity last sent to the external solver at the velocity points, which
+ *  the relative velocity of the next step is made of. The root process of
+ *  the turbine writes them, and nothing is written before the correction has
+ *  started.
+ */
+template <typename datatype>
+void external_write_checkpoint(datatype& data, const std::string& chkname)
+{
+    auto& tdata = data.meta();
+    if (!data.info().is_root_proc || tdata.fllc.empty() ||
+        !tdata.fllc.front().initialized) {
+        return;
+    }
+
+    auto os = restart::create_file(
+        chkname, data.info().label, data.sim().time().new_time());
+    restart::write_value(os, "num_blades", tdata.num_blades);
+
+    const auto& uvel = tdata.ext_data.fluid_velocity(0);
+    const auto& vvel = tdata.ext_data.fluid_velocity(1);
+    const auto& wvel = tdata.ext_data.fluid_velocity(2);
+    VecList fluid_vel(tdata.num_vel_pts_blade);
+    for (int ib = 0; ib < tdata.num_blades; ++ib) {
+        fllc_write_state(os, tdata.fllc[ib]);
+        // Same first point as the blade views (make_component_views)
+        const int start_vel =
+            ib * tdata.num_vel_pts_blade + tdata.velocity_points_offset;
+        for (int i = 0; i < tdata.num_vel_pts_blade; ++i) {
+            fluid_vel[i][0] = uvel[start_vel + i];
+            fluid_vel[i][1] = vvel[start_vel + i];
+            fluid_vel[i][2] = wvel[start_vel + i];
+        }
+        restart::write_list(os, "fluid_velocity", fluid_vel);
+    }
+}
+
+/** Take the state of the filtered lifting line correction of an external
+ *  turbine from the checkpoint that the run restarts from
+ *
+ *  \return False when the checkpoint has no state of this turbine for the
+ *  current time, or when the state is for other numbers of blades or points
+ *  or for other inputs of the correction. Nothing is changed then.
+ */
+template <typename datatype>
+bool external_read_checkpoint(datatype& data, const std::string& chkname)
+{
+    auto& tdata = data.meta();
+    std::ifstream is;
+    if (!restart::open_file(
+            is, chkname, data.info().label,
+            data.sim().time().current_time())) {
+        return false;
+    }
+    int num_blades = 0;
+    if (!restart::read_value(is, "num_blades", num_blades) ||
+        (num_blades != tdata.num_blades)) {
+        return false;
+    }
+
+    // Read into copies, so that nothing is changed when the state of one
+    // of the blades does not fit
+    std::vector<FLLCData> fllc(tdata.fllc);
+    std::vector<VecList> fluid_vel(num_blades);
+    for (int ib = 0; ib < num_blades; ++ib) {
+        fluid_vel[ib].resize(tdata.num_vel_pts_blade);
+        if (!fllc_read_state(is, fllc[ib]) ||
+            !restart::read_list(is, "fluid_velocity", fluid_vel[ib])) {
+            return false;
+        }
+    }
+
+    tdata.fllc = fllc;
+    const auto& uvel = tdata.ext_data.fluid_velocity(0);
+    const auto& vvel = tdata.ext_data.fluid_velocity(1);
+    const auto& wvel = tdata.ext_data.fluid_velocity(2);
+    for (int ib = 0; ib < num_blades; ++ib) {
+        const int start_vel =
+            ib * tdata.num_vel_pts_blade + tdata.velocity_points_offset;
+        for (int i = 0; i < tdata.num_vel_pts_blade; ++i) {
+            uvel[start_vel + i] = static_cast<float>(fluid_vel[ib][i][0]);
+            vvel[start_vel + i] = static_cast<float>(fluid_vel[ib][i][1]);
+            wvel[start_vel + i] = static_cast<float>(fluid_vel[ib][i][2]);
+        }
+    }
+    return true;
+}
+
 template <typename datatype>
 void compute_force_op(datatype& data)
 {
@@ -267,16 +365,40 @@ void compute_force_op(datatype& data)
 
     auto& tdata = data.meta();
     if (!tdata.fllc.empty()) {
+        bool started = false;
         for (int i = 0; i < tdata.num_blades; ++i) {
             if (!(tdata.fllc[i].initialized) &&
                 (time.current_time() > tdata.fllc[i].fllc_start_time)) {
+                // eps_chord holds (thickness, chord, span) after
+                // init_epsilon: component 0 is the second input value of
+                // epsilon_chord
                 fllc_init(
                     tdata.fllc[i], tdata.blades[i], tdata.eps_chord[0],
                     data.info().label + " blade " + std::to_string(i),
                     data.info().is_root_proc);
+                started = true;
+            }
+        }
+
+        // A run that restarts with the correction on goes on from the state
+        // of the checkpoint. Without it the correction starts from zero and
+        // needs many time steps to come back.
+        auto& io = data.sim().io_manager();
+        if (started && tdata.at_first_force_call && io.is_restart() &&
+            data.info().is_root_proc) {
+            if (!external_read_checkpoint<datatype>(data, io.restart_file())) {
+                amrex::OutStream()
+                    << "\nWARNING: Actuator " << data.info().label
+                    << ": the checkpoint " << io.restart_file()
+                    << " has no state of the filtered lifting line "
+                    << "correction that fits this turbine: none for this "
+                    << "time, or one for other numbers of blades or points "
+                    << "or for other inputs of the correction. The "
+                    << "correction starts from zero." << std::endl;
             }
         }
     }
+    tdata.at_first_force_call = false;
 }
 
 } // namespace kynema_sgf::actuator::ops

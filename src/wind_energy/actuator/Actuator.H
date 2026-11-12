@@ -50,6 +50,9 @@ public:
 
     void post_advance_work() override;
 
+    //! Restart data of the actuators that no field holds
+    void write_checkpoint(const std::string& chkname) override;
+
     [[nodiscard]] ActuatorModel& get_act(int index) const
     {
         return *m_actuators.at(index);
