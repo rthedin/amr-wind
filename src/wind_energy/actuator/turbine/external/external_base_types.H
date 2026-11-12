@@ -90,9 +90,6 @@ struct ExternalTurbine
     //! Time step index for external
     int time_index{0};
 
-    //! Checkpoint interval for external
-    int chkpt_interval;
-
     //! Data access functions that have to be defined for each type
     virtual float* position_at_vel(int dir) const = 0;
     virtual float* solid_velocity(int dir) const = 0;

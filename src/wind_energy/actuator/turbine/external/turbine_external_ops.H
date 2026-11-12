@@ -45,9 +45,6 @@ void read_ops(datatype& data, const utils::ActParser& pp)
     tf.num_pts_blade = tdata.num_pts_blade;
     tf.num_pts_tower = tdata.num_pts_tower;
     tf.dt_cfd = data.sim().time().delta_t();
-
-    const auto& time = data.sim().time();
-    tf.chkpt_interval = time.chkpt_interval();
 }
 
 template <typename datatype>
