@@ -166,6 +166,28 @@ void init_data_op(datatype& data)
     init_epsilon<datatype>(data);
 }
 
+/** \brief Copy velocity points of the external solver
+ *
+ *  Copies vel_pos.size() points, from point start of the solver's list of
+ *  velocity points on, shifted by the base position of the turbine. The
+ *  solver holds the points of its current time, and only on the root
+ *  process of the turbine.
+ */
+template <typename datatype, typename VecType>
+void copy_ext_vel_pos(const datatype& data, VecType& vel_pos, const int start)
+{
+    const auto& tdata = data.meta();
+    const auto& bp = data.info().base_pos;
+    const auto& pxvel = tdata.ext_data.position_at_vel(0);
+    const auto& pyvel = tdata.ext_data.position_at_vel(1);
+    const auto& pzvel = tdata.ext_data.position_at_vel(2);
+    for (int i = 0; i < static_cast<int>(vel_pos.size()); ++i) {
+        vel_pos[i].x() = static_cast<amrex::Real>(pxvel[start + i]) + bp.x();
+        vel_pos[i].y() = static_cast<amrex::Real>(pyvel[start + i]) + bp.y();
+        vel_pos[i].z() = static_cast<amrex::Real>(pzvel[start + i]) + bp.z();
+    }
+}
+
 template <typename datatype>
 void update_pos_op(datatype& data)
 {
@@ -177,17 +199,7 @@ void update_pos_op(datatype& data)
         return;
     }
 
-    const auto& tdata = data.meta();
-    const auto& bp = data.info().base_pos;
-    const auto& pxvel = tdata.ext_data.position_at_vel(0);
-    const auto& pyvel = tdata.ext_data.position_at_vel(1);
-    const auto& pzvel = tdata.ext_data.position_at_vel(2);
-    auto& vel_pos = data.grid().vel_pos;
-    for (int i = 0; i < vel_pos.size(); ++i) {
-        vel_pos[i].x() = static_cast<amrex::Real>(pxvel[i]) + bp.x();
-        vel_pos[i].y() = static_cast<amrex::Real>(pyvel[i]) + bp.y();
-        vel_pos[i].z() = static_cast<amrex::Real>(pzvel[i]) + bp.z();
-    }
+    copy_ext_vel_pos(data, data.grid().vel_pos, 0);
 }
 
 template <typename datatype>
@@ -391,11 +403,31 @@ void compute_force_op(datatype& data)
                     waits = true;
                     continue;
                 }
+                // fllc_init compares the velocity points with the force
+                // points by their distances from the first point, and
+                // keeps these distances. That takes positions of one
+                // instant: a blade that bends has other distances a time
+                // step later. After a step of the external solver the grid
+                // holds its force points of the new time and its velocity
+                // points of the time before (update_pos_op ran before the
+                // step), so the velocity points of the new time are taken
+                // from the solver. Only the root process has them, and
+                // only that process uses the result.
+                ComponentView view = tdata.blades[i];
+                VecList vel_pos_now(tdata.num_vel_pts_blade);
+                if (data.info().is_root_proc) {
+                    copy_ext_vel_pos(
+                        data, vel_pos_now,
+                        i * tdata.num_vel_pts_blade +
+                            tdata.velocity_points_offset);
+                    view.vel_pos = ::kynema_sgf::utils::slice(
+                        vel_pos_now, 0, tdata.num_vel_pts_blade);
+                }
                 // eps_chord holds (thickness, chord, span) after
                 // init_epsilon: component 0 is the second input value of
                 // epsilon_chord
                 fllc_init(
-                    tdata.fllc[i], tdata.blades[i], tdata.eps_chord[0],
+                    tdata.fllc[i], view, tdata.eps_chord[0],
                     data.info().label + " blade " + std::to_string(i),
                     data.info().is_root_proc);
                 started = true;
