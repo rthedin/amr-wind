@@ -385,7 +385,8 @@ Example for ``TurbineFastLine``::
    three directions when the correction is on.
    Once the correction has started, its state is written into every
    checkpoint (directory ``actuator`` inside it), and a run that restarts
-   from the checkpoint goes on from that state.
+   from the checkpoint goes on from that state, unless OpenFAST starts the
+   turbine anew (``openfast_sim_mode = init``).
 
 .. input_param:: Actuator.TurbineFastLine.fllc_relaxation_factor
 
