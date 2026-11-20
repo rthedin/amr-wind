@@ -140,8 +140,6 @@ private:
     amrex::Real m_Cb_unstable{0.35_rt};
     //! von Karman constant (ABL.kappa), shared with KransAxell
     amrex::Real m_kappa{0.41_rt};
-    //! Keep the earlier production terms that carry an extra factor of rho
-    bool m_rho_weighted_prod{false};
     Field& m_temperature;
     //! Gravity vector (m/s^2)
     amrex::Vector<amrex::Real> m_gravity{0.0_rt, 0.0_rt, -9.81_rt};
